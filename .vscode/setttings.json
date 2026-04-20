@@ -1,0 +1,14 @@
+{
+  "css.validate": false,
+  "scss.validate": false,
+  "less.validate": false,
+  "css.lint.unknownAtRules": "ignore",
+  "scss.lint.unknownAtRules": "ignore",
+  "stylelint.enable": true,
+  "deno.enablePaths": [
+    "functions/server"
+  ],
+  "files.associations": {
+    "*.css": "postcss"
+  }
+}

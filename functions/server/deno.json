@@ -1,0 +1,7 @@
+{
+  "imports": {
+    "hono": "npm:hono@latest",
+    "@libsql/client/web": "npm:@libsql/client@^0.17.2/web",
+    "bcryptjs": "npm:bcryptjs@latest"
+  }
+}

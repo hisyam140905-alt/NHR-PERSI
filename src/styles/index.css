@@ -1,0 +1,23 @@
+/* 1. Import the core Tailwind engine */
+@import "tailwindcss";
+
+/* 2. Tell Tailwind where to look for your React classes */
+@source "./**/*.{js,ts,jsx,tsx}";
+
+/* 3. Import any custom themes or animations you have (keep these if the files actually exist in your src folder) */
+@import "./theme.css";
+@import "tw-animate-css";
+
+/* 4. Your custom utility classes */
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    /* IE and Edge */
+    scrollbar-width: none;
+    /* Firefox */
+  }
+}

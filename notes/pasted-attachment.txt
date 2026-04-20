@@ -1,0 +1,175 @@
+Role: Anda adalah sistem pengumpulan data medis untuk akreditasi dan ranking rumah sakit.
+Tujuan: Mengumpulkan data dari 3 departemen (Kardiologi, Neurologi, Onkologi) secara paralel.
+
+A. Modul RSBK (Bobot 15%)
+
+Sistem harus menampilkan input berupa angka (kuantitas) untuk setiap item di bawah ini:
+
+Spesialisasi: Kardiologi
+
+SDM (Dokter Spesialis): Masukkan jumlah untuk: Sp.JP, Sp.PD, Sp.B, Sp.A, Sp.PD-KKV, Sp.JP (Sub) Kardio Intervensi, Sp.B-Sub Onk, Sp.JP (Sub) Perawatan Intensif, Sp.An, Sp.PK, Sp.Rad, Sp.B-Sub BVE, Sp.BTKV, Sp.A-Sub Kardio, Sp.JP (Sub) Pencitraan, Sp.JP (Sub) Ekokardiografi, Sp.JP (Sub) Aritmia, Sp.JP (Sub) Kedokteran Vaskular, Sp.JP (Sub) Prevensi Rehabilitasi, Sp.An (Sub) Intensive Care, Sp.KFR, Sp.GK, Sp.P, Sp.N.
+
+Sarana Ruangan: HCU, ICU, ICCU, PICU, NICU, R. Operasi, R. Operasi Mayor, R. Cathlab.
+
+Alat Medis: EKG, USG ECHO, X-ray, Holter, Treadmill, Bedside Monitor, Ventilator, ABPM, Advance ECHO (3D), CT Scan, IVUS, Sternal Saw, ACT, IABP, Heart Lung Machine, EECP, Rotablator, Gamma Camera, ICE, Tilt Table, LVAD, Nitric Oxide Machine, ECMO, Heart Transplant Set.
+
+Spesialisasi: Neurologi
+
+SDM (Dokter Spesialis): Sp.N, Sp.PD, Sp.A, Sp.N (Sub) Neurovaskular/Intervensi, Sp.Rad (Sub) Intervensi, Sp.BS, Sp.BS (Sub) Vaskular, Sp.PK, Sp.An, Sp.PA, Sp.KFR, Sp.GK, Sp.An (Sub) KIC/Neuroanestesi.
+
+Sarana Ruangan: HCU, ICU, PICU/NICU, Unit Stroke, Ruang EEG, R. Tindakan, R. Cathlab, R. Operasi, R. CT, R. MRI.
+
+Alat Medis: Mikroskop, Hematoanalyzer, X-Ray, USG, Funduscopy, TCD, CT Scan (64/128/256 Slice), MRI (1.5/3 Tesla), Cathlab Biplane, EEG/Video EEG, EMG, Radiofrequency Lesion Generator, Neuronavigasi, ICP Monitoring.
+
+B. Modul Audit Klinis (Bobot 60%)
+
+Setiap penyakit memiliki bobot 50%. Input berupa persentase (%).
+
+Kardiologi (Penyakit 1: STEMI)
+
+Diagnosa (25%): % EKG < 10 menit.
+
+Tatalaksana (25%): % Revaskularisasi (Fibrinolitik/PCI), % Stratifikasi Killip, % Door to Balloon ≤ 90 menit.
+
+Outcome (50%): % Pasien Hidup, % LOS < 5 hari (kecuali Killip III/IV).
+
+Neurologi (Penyakit 1: Stroke Non-Hemoragik)
+
+Diagnosa (25%): % CT Scan < 30 menit, % Cek Gula Darah saat masuk.
+
+Tatalaksana (25%): % Pemberian rtPA (Alteplase), % Antiplatelet/Antikoagulan.
+
+Outcome (50%): % Pasien Pulang Hidup, % LOS < 7 hari (tanpa komplikasi).
+
+2. Kuesioner PRM (PREM & PROM) - Berbasis Literatur
+Berikut adalah draft kuesioner berdasarkan standar Patient-Reported Outcomes (seperti ICHOM atau SF-36) dan Patient Experience:
+
+PREM (Patient Reported Experience Measures) - Bobot 60% dari 25%
+
+Gunakan Skala Likert 1-5 (Sangat Tidak Puas - Sangat Puas)
+
+Sejauh mana dokter menjelaskan rencana tindakan (Primary PCI/Trombolisis) dengan bahasa yang mudah dimengerti?
+
+Apakah staf medis merespons dengan cepat saat Anda mengalami nyeri dada/gejala stroke berulang di bangsal?
+
+Seberapa terlibat Anda/keluarga dalam pengambilan keputusan mengenai prosedur medis?
+
+Bagaimana kebersihan dan kenyamanan ruang perawatan intensif (ICCU/Stroke Unit)?
+
+PROM (Patient Reported Outcome Measures) - Bobot 40% dari 25%
+
+Fokus pada fungsionalitas pasca-tindakan
+
+Kardiologi (Post-STEMI):
+
+Seberapa sering Anda merasa sesak napas saat beraktivitas ringan dalam seminggu terakhir?
+
+Apakah Anda mampu berjalan 100 meter tanpa nyeri dada?
+
+Neurologi (Post-Stroke):
+
+Sejauh mana Anda mampu melakukan aktivitas harian (makan/mandi) secara mandiri?
+
+Apakah Anda mengalami kesulitan bicara atau memahami pembicaraan orang lain?
+
+3. Struktur Dashboard Admin (Manajemen Pertanyaan)
+Halaman Admin harus memiliki fitur CRUD (Create, Read, Update, Delete) yang terbagi menjadi:
+
+Tab Menu	Fungsi
+Konfigurasi RSBK	Edit list spesialis, tambah/hapus jenis alat medis, dan update poin per dokter.
+Master Audit Klinis	Edit ambang batas waktu (misal: ubah 90 menit jadi 60 menit) dan rumus bobot tiap fase.
+Bank Soal PRM	Input kuesioner PREM/PROM baru dan penentuan skor akhir.
+Log Pengisian	Melihat progres input dari masing-masing spesialisasi secara real-time.
+4. Halaman Metodologi Penilaian (Untuk User)
+Halaman ini akan menjelaskan kepada user bagaimana angka mereka dihitung:
+
+Logika Perhitungan Total Skor
+
+Total=(SkorRSBK×15%)+(SkorAudit×60%)+(SkorPRM×25%)
+Panduan Pengisian:
+
+Akses Paralel: Admin Kardiologi dan Neurologi dapat mengisi data secara bersamaan tanpa menunggu satu sama lain.
+
+Validasi Data: Untuk RSBK, masukkan angka riil sesuai SIP dokter dan inventaris alat.
+
+Audit Klinis: Data diambil dari rekam medis pasien selama periode penilaian (misal: 1 tahun terakhir).
+
+Skala PRM: Nilai akhir PRM adalah rata-rata skor kuesioner yang disebar ke minimal 30 pasien per penyakit.
+
+detailnya kalkulasinya 
+. Modul Pengisian Data (User Interface)
+Sistem akan menggunakan konversi poin otomatis sebagai berikut:
+
+A. RSBK (Bobot 15%)
+
+Setiap input unit/orang bernilai 1 Poin. Skor Akhir = (Total Poin / Target Poin) x 100.
+
+Spesialisasi	Kategori SDM (Input Jumlah)	Kategori Sarana & Alat (Input Jumlah)
+Kardiologi	Sp.JP, Sp.PD, Sp.B, Sp.A, Sp.PD-KKV, Sp.JP (Sub) Intervensi, Sp.BTKV, Sp.An (KIC), Sp.PK, Sp.Rad, Sp.KFR, Sp.GK, Sp.P, Sp.N.	HCU, ICU, ICCU, R. Cathlab, EKG, ECHO (2D/3D), CT Scan, MRI, IVUS, IABP, Heart Lung Machine, ECMO.
+Neurologi	Sp.N, Sp.BS, Sp.N (Sub) Intervensi, Sp.Rad (Sub) Intervensi, Sp.An (Sub) Neuroanestesi, Sp.A (Sub) Neurologi, Sp.PA.	Unit Stroke, R. EEG, R. Cathlab, Mikroskop Bedah, TCD, CT Scan (64/128/256 Slice), MRI (1.5/3T), EMG, Neuronavigasi.
+B. Audit Klinis (Bobot 60%)
+
+Sistem menggunakan logika Sesuai (1 Poin) atau Tidak Sesuai (0 Poin) per pasien.
+
+Kardiologi (Penyakit: STEMI)
+
+EKG ≤ 10 menit: (Sesuai/Tidak) → Bobot 25% (Diagnosa).
+
+Revaskularisasi (Fibrinolitik/PCI): (Sesuai/Tidak) → Bobot 25% (Tatalaksana).
+
+Door to Balloon ≤ 90 menit: (Sesuai/Tidak) → Bobot 25% (Tatalaksana).
+
+Outcome (Hidup & LOS < 5 Hari): (Sesuai/Tidak) → Bobot 50% (Outcome).
+
+Neurologi (Penyakit: Stroke Non-Hemoragik)
+
+CT Scan ≤ 30 menit: (Sesuai/Tidak) → Bobot 25% (Diagnosa).
+
+Cek Gula Darah saat masuk: (Sesuai/Tidak) → Bobot 25% (Diagnosa).
+
+Pemberian rtPA (Alteplase): (Sesuai/Tidak) → Bobot 25% (Tatalaksana).
+
+Antiplatelet/Antikoagulan: (Sesuai/Tidak) → Bobot 25% (Tatalaksana).
+
+Outcome (Hidup & LOS < 7 Hari): (Sesuai/Tidak) → Bobot 50% (Outcome).
+
+C. PRM: PREM & PROM (Bobot 25%)
+
+Menggunakan Skala Likert untuk konversi poin.
+
+Sangat Puas / Sangat Mandiri: 5 Poin
+
+Puas / Mandiri: 4 Poin
+
+Cukup: 3 Poin
+
+Kurang: 2 Poin
+
+Sangat Kurang / Tergantung Total: 1 Poin
+
+Jenis	Pertanyaan (Contoh untuk Admin)
+PREM (60%)	Kemudahan komunikasi DPJP, kecepatan respons perawat, kebersihan fasilitas, keterlibatan keluarga.
+PROM (40%)	Kardio: Kemampuan naik tangga tanpa sesak. Neuro: Kemampuan makan/berpakaian mandiri (Skala Barthel).
+2. Dashboard Admin (Control Panel)
+Dashboard ini dirancang untuk fleksibilitas pengisian:
+
+Menu "Manage Questionnaire":
+
+Tambah/Edit Item: Admin bisa menambah jenis dokter (misal: Sp.An Kardio) atau alat baru.
+
+Threshold Audit: Mengubah standar waktu (misal: CT Scan dari 30 menit menjadi 20 menit).
+
+Menu "Weighting Config": Mengatur ulang bobot (15/60/25) jika kebijakan PERSI berubah.
+
+Menu "Live Monitoring": Melihat progres pengisian tiap spesialisasi (Kardiologi: 80% selesai, Neurologi: 45% selesai).
+
+3. Metodologi Penilaian (Page Help/Guide)
+Validasi SDM & Alat: Masukkan jumlah ketersediaan riil. Poin maksimal ditentukan oleh standar kelas RS (Utama/Paripurna).
+
+Audit Klinis: Masukkan total pasien dalam 1 periode. Sistem akan menghitung persentase kepatuhan secara otomatis.
+
+PRM: Data diambil dari survei pasien. Skor akhir adalah rata-rata poin dari seluruh responden dibagi skor maksimal (5).
+
+Total Skor:
+
+Total=(RSBK×0.15)+(Audit×0.60)+(PRM×0.25)
