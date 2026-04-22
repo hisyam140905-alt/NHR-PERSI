@@ -43,21 +43,40 @@ export function PatientReportPage() {
   const diseases = specData?.diseases || [];
 
 
-  // Grab the correct session data that actually holds the name
-  const sessionStr = sessionStorage.getItem("persi_hospital_session");
-  const currentHospital = sessionStr ? JSON.parse(sessionStr) : {};
+  // --- THE PREFIX + ID FIX ---
+  const sessionStr = sessionStorage.getItem("persi_hospital_session") || sessionStorage.getItem("hospitalAuth");
+  
+  // 1. Parse the raw session object
+  const rawSession = sessionStr ? JSON.parse(sessionStr) : {};
 
-  // Extract the name and build the code
+  // 2. THE CRITICAL FIX: Extract the nested 'data' object! 
+  // If rawSession.data exists (new login), use it. Otherwise, fallback to rawSession (legacy).
+  const currentHospital = rawSession.data || rawSession;
+
   const realHospitalName = currentHospital.hospitalName || currentHospital.hospital_name || "Unknown Hospital";
-  const hospitalCode = realHospitalName !== "Unknown Hospital"
-    ? realHospitalName.substring(0, 3).toUpperCase() + "001"
-    : "HOS001";
+  
+  // 1. Extract up to the first 2 words (e.g., "RSUD Sleman", "RS Paru") and format with hyphen
+  const nameParts = realHospitalName.replace(/[^a-zA-Z0-9\s]/g, '').trim().split(/\s+/);
+  const shortName = nameParts.slice(0, 2).join('-').toUpperCase() || "HOS";
+  
+  // 2. Strip out the annoying "hosp-" string from the database ID
+  const cleanId = currentHospital?.id ? String(currentHospital.id).replace('hosp-', '') : '';
+
+  // 3. Combine into the clean format: RSUD-SLEMAN-1776679507569
+  const hospitalCode = cleanId 
+    ? `${shortName}-${cleanId}` 
+    : currentHospital?.email
+      ? `${shortName}-${currentHospital.email.split("@")[0].replace(/[^a-zA-Z0-9]/g, "").toUpperCase()}`
+      : `${shortName}-001`;
 
   const [activeDiseaseIndex, setActiveDiseaseIndex] = useState(0);
   const activeDisease = diseases[activeDiseaseIndex];
 
   // Use disease-specific key suffix for API calls
   const diseaseSpecialtyKey = `${specialty}-d${activeDiseaseIndex}`;
+
+  // ---> NEW: Get the draftId using a unique variable name to avoid collisions
+  const currentDraftId = draftManager.getCurrentDraftId() || "unknown-draft";
 
   const [surveyResponses, setSurveyResponses] = useState<PatientSurveyResponse[]>([]);
   const [registeredPatients, setRegisteredPatients] = useState<RegisteredPatient[]>([]);
@@ -69,13 +88,14 @@ export function PatientReportPage() {
   const [registerError, setRegisterError] = useState("");
   const [draftSavedMsg, setDraftSavedMsg] = useState(false);
   const [loading, setLoading] = useState(true);
+  
   // Custom hospital survey upload
-
   const [customSurveyUploaded, setCustomSurveyUploaded] = useState(false);
   const [customSurveyFileName, setCustomSurveyFileName] = useState<string>("");
   const [customSurveyPatientCount, setCustomSurveyPatientCount] = useState<number>(0);
 
-  const customSurveyKey = `custom-survey-${hospitalCode}-${diseaseSpecialtyKey}`;
+  // ---> THE FIX: Bind the PDF storage slot strictly to the current draft
+  const customSurveyKey = `custom-survey-${currentDraftId}-${hospitalCode}-${diseaseSpecialtyKey}`;
 
   // Load existing custom survey upload from localStorage on mount & disease change
   useEffect(() => {
@@ -100,19 +120,26 @@ export function PatientReportPage() {
 
     if (file.size > 2 * 1024 * 1024) {
       alert("Ukuran file maksimal 2MB. Vercel LocalStorage memiliki kuota yang terbatas.");
+      e.target.value = ""; // Reset input cache
       return;
     }
 
     if (file.type !== "application/pdf") {
       alert("Hanya format PDF yang diperbolehkan");
+      e.target.value = ""; // Reset input cache
       return;
     }
 
     const countStr = prompt("Berapa jumlah pasien yang disurvei dalam dokumen PDF ini?\n(Kosongkan atau isi 0 jika tidak tahu/ingin menggunakan kombinasi dengan QR Code)", "0");
-    if (countStr === null) return;
+    if (countStr === null) {
+      e.target.value = ""; // Reset if user clicks Cancel
+      return;
+    }
+    
     const count = parseInt(countStr, 10);
     if (isNaN(count) || count < 0) {
       alert("Jumlah pasien tidak valid.");
+      e.target.value = ""; // Reset input cache
       return;
     }
 
@@ -126,7 +153,11 @@ export function PatientReportPage() {
         uploadedAt: new Date().toISOString(),
         hospitalCode,
         realHospitalName,
-        specialty,
+        
+        // FIX: Save the display name (e.g. "Kardiologi") instead of the URL slug 
+        // so it perfectly matches what the Admin Review filter expects!
+        specialty: specData?.name || specialty, 
+        
         diseaseName: activeDisease?.diseaseName || ""
       };
 
@@ -139,10 +170,12 @@ export function PatientReportPage() {
       } catch (err) {
         alert("Gagal mengunggah file. Mungkin ukuran terlalu besar (Storage Penuh/Melebihi Kuota).");
       }
+      
+      e.target.value = ""; // Reset input cache for future uploads
     };
     reader.readAsDataURL(file);
   };
-
+  
   const handleRemoveFile = () => {
     localStorage.removeItem(customSurveyKey);
     setCustomSurveyFileName("");
@@ -335,6 +368,15 @@ export function PatientReportPage() {
       console.error("Failed to save draft:", err);
     }
   };
+
+  const draftId = draftManager.getCurrentDraftId();
+  if (draftId && specialty) {
+    draftManager.updateDraft(draftId, specialty, "patientReport", {
+      data: { registeredPatients },
+      patientCount: registeredPatients.length,
+      completed: false,
+    });
+  }
 
   const handleContinue = async () => {
     await handleSaveDraft();
@@ -977,7 +1019,8 @@ export function PatientReportPage() {
         {/* Action Buttons */}
         <div className="flex gap-4">
           <Button
-            onClick={handleSaveDraft}
+            type="button"
+            onClick={(e) => { e.preventDefault(); handleSaveDraft(); }}
             variant="outline"
             className="h-12 px-8 border-2 border-gray-300 font-semibold"
           >
@@ -986,7 +1029,8 @@ export function PatientReportPage() {
           </Button>
 
           <Button
-            onClick={handleIsiNanti}
+            type="button"
+            onClick={(e) => { e.preventDefault(); handleIsiNanti(); }}
             variant="outline"
             className="h-12 px-8 border-2 border-yellow-400 text-yellow-700 hover:bg-yellow-50 font-semibold"
           >
@@ -994,6 +1038,7 @@ export function PatientReportPage() {
           </Button>
 
           <Button
+            type="button"
             onClick={handleContinue}
             disabled={patientCount < 1}
             className="flex-1 h-12 bg-[#0F4C81] hover:bg-[#0d3d66] font-semibold disabled:opacity-50 disabled:cursor-not-allowed"

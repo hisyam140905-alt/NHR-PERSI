@@ -106,7 +106,7 @@ export function NewsPage() {
                   </h3>
                   <p className="text-sm text-gray-500 line-clamp-2 mb-3">{item.excerpt}</p>
                   <div className="flex items-center gap-3 text-xs text-gray-400 mt-auto">
-                    <span>{item.author}</span>
+                    <span>{item.author || "Tim Redaksi PERSI"}</span>
                     <span>&bull;</span>
                     <span>{new Date(item.publishedAt).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}</span>
                   </div>
@@ -160,7 +160,7 @@ export function NewsDetailPage() {
         </span>
         <h1 className="text-3xl md:text-4xl font-[700] text-gray-900 mb-4 leading-tight">{article.title}</h1>
         <div className="flex items-center gap-4 text-sm text-gray-500 mb-6">
-          <span className="flex items-center gap-1"><User className="w-4 h-4" />{article.author}</span>
+          <span className="flex items-center gap-1"><User className="w-4 h-4" />{article.author || "Tim Redaksi PERSI"}</span>
           <span className="flex items-center gap-1">
             <Calendar className="w-4 h-4" />
             {new Date(article.publishedAt).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })}

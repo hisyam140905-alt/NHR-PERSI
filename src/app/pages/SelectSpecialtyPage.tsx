@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Link, useNavigate } from "react-router";
-import { Heart, Activity, Brain, ChevronRight, CheckCircle2, Clock, Trash2, Play, Plus, Users, Layout, MapPin, ArrowRight } from "lucide-react";
+import { Heart, Activity, Brain, ChevronRight, CheckCircle2, Clock, Trash2, Play, Plus, Users, Layout, MapPin, ArrowRight, Building2, FileText } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { specialtyAuditData } from "../data/specialtyAuditData";
 import { draftManager, DraftData } from "../utils/draftManager";
@@ -14,18 +14,25 @@ export function SelectSpecialtyPage() {
 
   // Check authentication on mount
   useEffect(() => {
-    const auth = sessionStorage.getItem("hospitalAuth");
+    // 1. Prioritize the modern session key, fallback to the old one to prevent stale data leaks
+    const auth = sessionStorage.getItem("persi_hospital_session") || sessionStorage.getItem("hospitalAuth");
     if (!auth) {
       navigate("/hospital-login");
       return;
     }
+    
     const parsedAuth = JSON.parse(auth);
-    setAuthData(parsedAuth);
+    
+    // 2. Safely extract names handling both frontend (camelCase) and backend (snake_case) formats
+    const realHospitalName = parsedAuth.hospitalName || parsedAuth.hospital_name || "Unknown Hospital";
+    const realPicName = parsedAuth.picName || parsedAuth.pic_name || "Unknown PIC";
 
-    // Initial load from local
+    setAuthData({ hospitalName: realHospitalName, picName: realPicName });
+
+    // 3. Initial load from local using the robust name
     const loadLocalDrafts = () => {
       const allDrafts = draftManager.getAllDrafts();
-      const hospitalDrafts = allDrafts.filter(d => d.hospitalName === parsedAuth.hospitalName);
+      const hospitalDrafts = allDrafts.filter(d => d.hospitalName === realHospitalName);
       setDrafts(hospitalDrafts);
     };
 
@@ -75,8 +82,6 @@ export function SelectSpecialtyPage() {
     // Navigate to first specialty's RSBK
     navigate(`/siap-persi/rsbk/${selectedSpecialties[0]}`);
   };
-
-
 
   const handleResumeDraft = (draft: DraftData) => {
     // Set draft as current
@@ -513,45 +518,12 @@ function DraftCard({
           </button>
         </div>
 
-        {/* Progress Bar - Modern Card Style */}
-        <div className="bg-gray-50 rounded-2xl p-6 mb-8 border border-gray-100">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-3">
-              <Layout className="w-5 h-5 text-[#0F4C81]" />
-              <span className="text-sm font-black text-gray-700 uppercase tracking-tight">Performa Draft</span>
-            </div>
-            <span className="text-2xl font-black text-[#0F4C81]">{progress.percentage}%</span>
-          </div>
-          <div className="w-full bg-gray-200 rounded-full h-4 relative overflow-hidden">
-            <div
-              className="absolute top-0 left-0 bg-gradient-to-r from-[#0F4C81] via-[#14B8A6] to-[#0F4C81] bg-[length:200%_auto] h-full rounded-full transition-all duration-1000 animate-gradient"
-              style={{ width: `${progress.percentage}%` }}
-            />
-          </div>
-          <div className="mt-4 flex justify-between items-center text-xs font-bold text-gray-500 uppercase tracking-widest">
-            <span>{progress.completedStages} Tahap Selesai</span>
-            <span>{progress.totalStages} Tahap Total</span>
-          </div>
-        </div>
+        
 
-        <div className="grid md:grid-cols-2 gap-8 mb-8">
-          {/* Specialties List */}
-          <div>
-            <p className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-4">Pelayanan</p>
-            <div className="flex flex-wrap gap-3">
-              {draft.selectedSpecialties.map((spec) => (
-                <div
-                  key={spec}
-                  className="flex items-center gap-3 px-4 py-2 bg-white border border-gray-100 shadow-sm rounded-xl text-sm font-bold group-hover:border-blue-100 transition-colors"
-                >
-                  <div className="text-[#0F4C81]">{specialtyIcons[spec]}</div>
-                  <span className="text-gray-700">{specialtyNames[spec]}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Next Steps */}
+        {/* Detail Pelayanan & Next Steps Container */}
+        <div className="flex flex-col gap-8 mb-8">
+          
+          {/* Next Steps (Moved to top of details for better visibility) */}
           {nextStage && (
             <div className="bg-[#0F4C81] rounded-2xl p-6 text-white shadow-xl shadow-blue-900/10 relative overflow-hidden">
               <div className="absolute top-0 right-0 w-24 h-24 bg-white/5 rounded-full -mr-12 -mt-12 blur-2xl" />
@@ -566,6 +538,102 @@ function DraftCard({
               </p>
             </div>
           )}
+
+          {/* Specialties Detailed Progress List */}
+          <div>
+            <p className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-4">Progress per Pelayanan</p>
+            <div className="grid gap-4">
+              {draft.selectedSpecialties.map((spec) => {
+                const specDetails = progress.details?.[spec];
+
+                return (
+                  <div key={spec} className="bg-white rounded-xl border border-gray-200 p-5 shadow-sm hover:shadow-md transition-shadow">
+                    <div className="flex items-center gap-3 mb-4">
+                      <div className="text-[#0F4C81] bg-blue-50 p-2 rounded-lg">{specialtyIcons[spec]}</div>
+                      <h3 className="font-bold text-gray-900 capitalize">{specialtyNames[spec]}</h3>
+                    </div>
+
+                    <div className="space-y-4">
+                      {/* 1. RSBK Stage */}
+                      <div>
+                        <div className="flex justify-between text-sm mb-1">
+                          <span className="flex items-center gap-2 font-medium text-gray-700">
+                            <Building2 className="w-4 h-4 text-[#0F4C81]" />
+                            Hospital Structure (RSBK)
+                          </span>
+                          <span className="text-gray-500 font-medium">
+                            {specDetails?.rsbk?.filled || 0} / {specDetails?.rsbk?.total || 15} Item
+                          </span>
+                        </div>
+                        <div className="w-full bg-gray-200 rounded-full h-2">
+                          <div
+                            className="bg-gradient-to-r from-[#0F4C81] to-[#14B8A6] h-2 rounded-full transition-all duration-500"
+                            style={{ width: `${specDetails?.rsbk?.progress || 0}%` }}
+                          />
+                        </div>
+                      </div>
+
+                      {/* 2. Clinical Audit Stage */}
+                      <div className="p-3 bg-blue-50/50 rounded-lg border border-blue-100">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="flex items-center gap-2 font-medium text-gray-700">
+                            <FileText className="w-4 h-4 text-blue-600" />
+                            Clinical Audit
+                          </span>
+                          {specDetails?.clinicalAudit?.completed ? (
+                            <span className="flex items-center gap-1 text-xs font-bold text-green-600 bg-green-100 px-2 py-0.5 rounded-full">
+                              <CheckCircle2 className="w-3.5 h-3.5" /> Lengkap (100%)
+                            </span>
+                          ) : (
+                            <span className="text-xs font-medium text-gray-400">Belum diisi</span>
+                          )}
+                        </div>
+                        <div className="flex justify-between items-center text-sm mt-2 pt-2 border-t border-blue-100/50">
+                          <span className="text-gray-600">
+                            <strong className="text-gray-900">{specDetails?.clinicalAudit?.patientCount || 0}</strong> Pasien Diinput
+                          </span>
+                          <span className="font-semibold text-[#0F4C81] flex items-center gap-1">
+                            Bobot Volume: 
+                            <span className="bg-white px-2 py-0.5 rounded shadow-sm border border-blue-100">
+                              {(specDetails?.clinicalAudit?.weight || 0).toFixed(2)}x
+                            </span>
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* 3. Patient Report (PREM/PROM) Stage */}
+                      <div className="p-3 bg-teal-50/50 rounded-lg border border-teal-100">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="flex items-center gap-2 font-medium text-gray-700">
+                            <Users className="w-4 h-4 text-teal-600" />
+                            Patient Report (PREM/PROM)
+                          </span>
+                          {specDetails?.patientReport?.completed ? (
+                            <span className="flex items-center gap-1 text-xs font-bold text-green-600 bg-green-100 px-2 py-0.5 rounded-full">
+                              <CheckCircle2 className="w-3.5 h-3.5" /> Lengkap (100%)
+                            </span>
+                          ) : (
+                            <span className="text-xs font-medium text-gray-400">Belum diisi</span>
+                          )}
+                        </div>
+                        <div className="flex justify-between items-center text-sm mt-2 pt-2 border-t border-teal-100/50">
+                          <span className="text-gray-600">
+                            <strong className="text-gray-900">{specDetails?.patientReport?.patientCount || 0}</strong> Pasien Diinput
+                          </span>
+                          <span className="font-semibold text-teal-700 flex items-center gap-1">
+                            Bobot Volume: 
+                            <span className="bg-white px-2 py-0.5 rounded shadow-sm border border-teal-100">
+                              {(specDetails?.patientReport?.weight || 0).toFixed(2)}x
+                            </span>
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </div>
 
         <Button

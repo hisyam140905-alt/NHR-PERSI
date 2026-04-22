@@ -3,7 +3,7 @@ import type { Context } from "hono";
 
 declare const Deno: {
   env: { get: (key: string) => string | undefined };
-  serve: (handler: any) => void;
+  serve: (handler: (req: Request) => Response | Promise<Response>) => void;
 };
 
 import { cors } from "hono/cors";
@@ -138,16 +138,16 @@ async function initDb() {
     // Registered patients (for QR code generation)
     `CREATE TABLE IF NOT EXISTS patients (
       id TEXT PRIMARY KEY,
-      hospital_code TEXT NOT NULL,
+      hospitalCode TEXT NOT NULL,
       specialty TEXT NOT NULL,
       name TEXT NOT NULL,
-      rm TEXT NOT NULL,
-      created_at TEXT DEFAULT (datetime('now'))
+      mrn TEXT NOT NULL,
+      registeredAt TEXT DEFAULT (datetime('now'))
     )`,
     // Patient survey responses (PREM/PROM)
     `CREATE TABLE IF NOT EXISTS surveys (
       id TEXT PRIMARY KEY,
-      hospital_code TEXT NOT NULL,
+      hospitalCode TEXT NOT NULL,
       specialty TEXT NOT NULL,
       patient_name TEXT NOT NULL,
       patient_rm TEXT NOT NULL,
@@ -161,7 +161,7 @@ async function initDb() {
     `CREATE TABLE IF NOT EXISTS drafts (
       id TEXT PRIMARY KEY,
       type TEXT NOT NULL,
-      hospital_code TEXT NOT NULL,
+      hospitalCode TEXT NOT NULL,
       specialty TEXT NOT NULL,
       data TEXT NOT NULL,
       updated_at TEXT DEFAULT (datetime('now'))
@@ -193,6 +193,32 @@ async function initDb() {
       patient_report_score REAL DEFAULT 0,
       grade TEXT DEFAULT 'C',
       approved_at TEXT DEFAULT (datetime('now'))
+    )`,
+    // Add these inside the `statements` array in initDb()
+    `CREATE TABLE IF NOT EXISTS news (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      excerpt TEXT,
+      content TEXT,
+      category TEXT,
+      imageUrl TEXT,
+      author TEXT,
+      publishedAt TEXT,
+      featured INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now'))
+    )`,
+    `CREATE TABLE IF NOT EXISTS events (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      description TEXT,
+      date TEXT,
+      endDate TEXT,
+      location TEXT,
+      type TEXT,
+      imageUrl TEXT,
+      registrationUrl TEXT,
+      featured INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now'))
     )`,
   ];
 
@@ -339,29 +365,22 @@ app.post("/make-server-5e1d66c4/admin/hospitals/approve", async (c: Context) => 
 });
 
 // --- REJECT A HOSPITAL (HARD DELETE) ---
-app.delete("/make-server-5e1d66c4/hospitals/:id", async (c: Context) => {
+// DELETE draft
+app.delete("/make-server-5e1d66c4/drafts/delete/:draftId", async (c: Context) => {
   try {
-    // 1. Grab the ID directly from the URL (matches our new frontend fetch route)
-    const id = c.req.param("id");
-
-    if (!id) {
-      return c.json({ error: "Missing hospital ID" }, 400);
-    }
-
-    // 2. Execute the Hard Delete to wipe the row completely
-    const result = await db.execute({
-      sql: "DELETE FROM hospitals WHERE id = ?",
-      args: [id]
+    const { draftId } = c.req.param();
+    
+    // 🚀 THE OBLITERATOR
+    await db.execute({ 
+      sql: "DELETE FROM drafts WHERE draft_key = ? OR data LIKE ?", 
+      args: [draftId, `%"draftId":"${draftId}"%`] 
     });
-
-    if (result.rowsAffected === 0) {
-      return c.json({ error: "Hospital not found or already deleted" }, 404);
-    }
-
-    return c.json({ success: true, message: "Hospital permanently wiped" });
+    
+    return c.json({ success: true });
   } catch (err) {
-    console.error("Deletion error:", err);
-    return c.json({ error: "Failed to wipe hospital account" }, 500);
+    const errorMessage = err instanceof Error ? err.message : "Unknown error";
+    console.error("Delete draft error:", errorMessage);
+    return c.json({ error: "Failed to delete draft" }, 500);
   }
 });
 
@@ -500,7 +519,7 @@ app.get("/make-server-5e1d66c4/surveys/:hospitalCode/:specialty", async (c: Cont
   try {
     const { hospitalCode, specialty } = c.req.param();
     const rs = await db.execute({
-      sql: "SELECT * FROM surveys WHERE hospital_code = ? AND specialty = ? ORDER BY created_at DESC",
+      sql: "SELECT * FROM surveys WHERE hospitalCode = ? AND specialty = ? ORDER BY registeredAt DESC",
       args: [hospitalCode, specialty]
     });
 
@@ -534,7 +553,7 @@ app.post("/make-server-5e1d66c4/surveys/:hospitalCode/:specialty", async (c: Con
     const id = Date.now().toString(36) + Math.random().toString(36).substring(2);
 
     const existing = await db.execute({
-      sql: "SELECT id FROM surveys WHERE hospital_code = ? AND specialty = ? AND patient_rm = ?",
+      sql: "SELECT id FROM surveys WHERE hospitalCode = ? AND specialty = ? AND patient_rm = ?",
       args: [hospitalCode, specialty, survey.medicalRecordNumber || survey.qRm || ""]
     });
 
@@ -543,7 +562,7 @@ app.post("/make-server-5e1d66c4/surveys/:hospitalCode/:specialty", async (c: Con
     }
 
     await db.execute({
-      sql: `INSERT INTO surveys (id, hospital_code, specialty, patient_name, patient_rm, prem_score, prom_score, overall_score, answers)
+      sql: `INSERT INTO surveys (id, hospitalCode, specialty, patient_name, patient_rm, prem_score, prom_score, overall_score, answers)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [
         id,
@@ -576,7 +595,7 @@ app.post("/make-server-5e1d66c4/surveys/:hospitalCode/:specialty/bulk", async (c
     const statements = surveys.map((survey: SurveyInput) => {
       const id = Date.now().toString(36) + Math.random().toString(36).substring(2);
       return {
-        sql: `INSERT INTO surveys (id, hospital_code, specialty, patient_name, patient_rm, prem_score, prom_score, overall_score, answers) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        sql: `INSERT INTO surveys (id, hospitalCode, specialty, patient_name, patient_rm, prem_score, prom_score, overall_score, answers) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [
           id, hospitalCode, specialty, survey.patientName || survey.qName || "",
           survey.medicalRecordNumber || survey.qRm || "", survey.premScore ?? 0,
@@ -600,7 +619,7 @@ app.delete("/make-server-5e1d66c4/surveys/:hospitalCode/:specialty", async (c: C
   try {
     const { hospitalCode, specialty } = c.req.param();
     await db.execute({
-      sql: "DELETE FROM surveys WHERE hospital_code = ? AND specialty = ?",
+      sql: "DELETE FROM surveys WHERE hospitalCode = ? AND specialty = ?",
       args: [hospitalCode, specialty]
     });
     return c.json({ success: true });
@@ -807,8 +826,8 @@ app.post("/make-server-5e1d66c4/submissions", async (c: Context) => {
 
     // Safely extract the scores (default to 0 if missing)
     const rsbk = submission.scores?.rsbk || 0;
-    const audit = submission.scores?.audit || 0;
-    const prm = submission.scores?.prm || 0;
+    const audit = submission.scores?.clinicalAudit || submission.scores?.audit || 0;
+    const prm = submission.scores?.patientReport || submission.scores?.prm || 0;
     const final = submission.scores?.final || 0;
 
     await db.execute({
@@ -859,10 +878,10 @@ app.get("/make-server-5e1d66c4/submissions", async (c: Context) => {
     `);
 
     const submissions = rs.rows.map((r: unknown) => {
-      const row = r as any; // Using 'any' here since we changed the schema layout
+      const row = r as Record<string, unknown>;
 
       // Unpack the JSON 'data' column to get our extra fields back
-      const fullData = row.data ? JSON.parse(row.data) : {};
+      const fullData = typeof row.data === "string" ? JSON.parse(row.data) : {};
 
       return {
         id: row.id,
@@ -939,7 +958,7 @@ app.get("/make-server-5e1d66c4/rankings", async (c: Context) => {
       ORDER BY r.final_score DESC
     `);
 
-    const rankings = rs.rows.map((row: any) => {
+    const rankings = rs.rows.map((row: Record<string, unknown>) => {
       // Prefer the hospital table's location over the submission's if available
       const finalCity = (row.h_city && row.h_city !== "-") ? row.h_city : row.city;
       const finalProvince = (row.h_province && row.h_province !== "-") ? row.h_province : row.province;
@@ -981,14 +1000,120 @@ app.delete("/make-server-5e1d66c4/rankings/:submissionId", async (c: Context) =>
   }
 });
 
-// ============ NEWS & EVENTS (STUBBED) ============
+// ============ NEWS ============
 
-app.post("/news", (c: Context) => { return c.json({ success: true }); });
-app.get("/news", (c: Context) => { return c.json({ news: [] }); });
-app.delete("/news/:id", (c: Context) => { return c.json({ success: true }); });
+app.post("/news", async (c: Context) => {
+  try {
+    const newsItem = await c.req.json();
+    const id = `news-${Date.now()}`;
+    
+    const finalAuthor = (newsItem.author && newsItem.author.trim() !== "") 
+      ? newsItem.author 
+      : "Tim Redaksi PERSI";
 
-app.post("/events", (c: Context) => { return c.json({ success: true }); });
-app.get("/events", (c: Context) => { return c.json({ events: [] }); });
-app.delete("/events/:id", (c: Context) => { return c.json({ success: true }); });
+    await db.execute({
+      sql: `INSERT INTO news (id, title, excerpt, content, category, imageUrl, author, publishedAt, featured)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [
+        id, newsItem.title, newsItem.excerpt, newsItem.content, 
+        newsItem.category, newsItem.imageUrl || "", finalAuthor, 
+        newsItem.publishedAt, newsItem.featured ? 1 : 0
+      ]
+    });
+    // Returning the newly created ID is what fixes the frontend routing bug!
+    return c.json({ success: true, id: id }); 
+  } catch (err) {
+    console.error("Failed to insert news:", err);
+    return c.json({ error: "Failed to add news" }, 500);
+  }
+});
+
+app.get("/news", async (c: Context) => {
+  try {
+    const rs = await db.execute("SELECT * FROM news ORDER BY publishedAt DESC");
+    const news = rs.rows.map((row: any) => ({
+      id: row.id,
+      title: row.title,
+      excerpt: row.excerpt,
+      content: row.content,
+      category: row.category,
+      imageUrl: row.imageUrl,
+      author: row.author,
+      publishedAt: row.publishedAt,
+      featured: row.featured === 1
+    }));
+    return c.json({ news });
+  } catch (err) {
+    console.error("Failed to fetch news:", err);
+    return c.json({ error: "Failed to fetch news" }, 500);
+  }
+});
+
+app.delete("/news/:id", async (c: Context) => {
+  try {
+    const { id } = c.req.param();
+    await db.execute({ sql: "DELETE FROM news WHERE id = ?", args: [id] });
+    return c.json({ success: true });
+  } catch (err) {
+    console.error("Failed to delete news:", err);
+    return c.json({ error: "Failed to delete news" }, 500);
+  }
+});
+
+// ============ EVENTS ============
+
+app.post("/events", async (c: Context) => {
+  try {
+    const event = await c.req.json();
+    const id = `event-${Date.now()}`;
+    
+    await db.execute({
+      sql: `INSERT INTO events (id, title, description, date, endDate, location, type, imageUrl, registrationUrl, featured)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [
+        id, event.title, event.description, event.date, event.endDate || "", 
+        event.location, event.type, event.imageUrl || "", event.registrationUrl || "", 
+        event.featured ? 1 : 0
+      ]
+    });
+    return c.json({ success: true, id: id });
+  } catch (err) {
+    console.error("Failed to insert event:", err);
+    return c.json({ error: "Failed to add event" }, 500);
+  }
+});
+
+app.get("/events", async (c: Context) => {
+  try {
+    const rs = await db.execute("SELECT * FROM events ORDER BY date ASC");
+    const events = rs.rows.map((row: any) => ({
+      id: row.id,
+      title: row.title,
+      description: row.description,
+      date: row.date,
+      endDate: row.endDate,
+      location: row.location,
+      type: row.type,
+      imageUrl: row.imageUrl,
+      registrationUrl: row.registrationUrl,
+      featured: row.featured === 1
+    }));
+    return c.json({ events });
+  } catch (err) {
+    console.error("Failed to fetch events:", err);
+    return c.json({ error: "Failed to fetch events" }, 500);
+  }
+});
+
+app.delete("/events/:id", async (c: Context) => {
+  try {
+    const { id } = c.req.param();
+    await db.execute({ sql: "DELETE FROM events WHERE id = ?", args: [id] });
+    return c.json({ success: true });
+  } catch (err) {
+    console.error("Failed to delete event:", err);
+    return c.json({ error: "Failed to delete event" }, 500);
+  }
+});
 
 Deno.serve(app.fetch);

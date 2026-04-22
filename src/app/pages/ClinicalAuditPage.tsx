@@ -4,7 +4,6 @@ import { ChevronRight, Save, AlertCircle, ChevronLeft, CheckCircle2 } from "luci
 import { Button } from "../components/ui/button";
 import { specialtyAuditData } from "../data/specialtyAuditData";
 import { SpecialtyProgressTracker } from "../components/SpecialtyProgressTracker";
-import * as api from "../utils/api";
 import { draftManager } from "../utils/draftManager";
 
 // Audit compliance options
@@ -34,12 +33,6 @@ function getSampleValidityWeight(count: number): number {
   return 1.0;
 }
 
-
-
-function getDraftKey(hospitalCode: string, specialty: string) {
-  return `clinical-audit-draft-${hospitalCode}-${specialty}`;
-}
-
 export function ClinicalAuditPage() {
   const { specialty } = useParams<{ specialty: string }>();
   const navigate = useNavigate();
@@ -53,45 +46,35 @@ export function ClinicalAuditPage() {
   const [currentPatient, setCurrentPatient] = useState(1);
   const [draftSavedMsg, setDraftSavedMsg] = useState(false);
 
-  // Get hospital code from session - Robust Version
-  const authData = JSON.parse(
-    sessionStorage.getItem("hospitalAuth") ||
-    sessionStorage.getItem("persi_hospital_session") ||
-    "{}"
-  );
 
-  const realHospitalName = authData.hospitalName || authData.hospital_name || "Unknown Hospital";
-  const hospitalCode = realHospitalName !== "Unknown Hospital"
-    ? realHospitalName.substring(0, 3).toUpperCase() + "001"
-    : "HOS001";
-
-  // Load draft on mount - try server first, then localStorage fallback
+  // Load draft on mount - Robust Sync with Draft Manager
   useEffect(() => {
-    // THE FIX: Stop the page from fetching if the hospital isn't fully loaded into memory yet!
-    if (!realHospitalName || realHospitalName === "Unknown Hospital" || !specialty) return;
+    const draftId = draftManager.getCurrentDraftId();
+    if (draftId && specialty) {
+      const draft = draftManager.getDraftById(draftId);
+      
+      // Ensure the clinicalAudit object exists
+      if (draft && draft.progress[specialty] && draft.progress[specialty].clinicalAudit) {
+        const caData = draft.progress[specialty].clinicalAudit;
+        
+        // 1. Restore formData
+        if (caData.data && Object.keys(caData.data).length > 0) {
+          setFormData(caData.data as Record<string, string>);
+        }
+        
+        // 2. Restore current patient
+        if (caData.currentPatient) {
+          setCurrentPatient(caData.currentPatient);
+        }
 
-    async function loadDraft() {
-      try {
-        const serverDraft = await api.getDraft("clinical-audit", hospitalCode, specialty!);
-        if (serverDraft && serverDraft.formData) {
-          setFormData(serverDraft.formData);
-          if (serverDraft.currentPatient) setCurrentPatient(serverDraft.currentPatient);
-          if (typeof serverDraft.activeDiseaseIndex === "number") setActiveDiseaseIndex(serverDraft.activeDiseaseIndex);
-          return;
+        // 3. Restore the active disease tab (This was the missing link!)
+        // Note: We have to cast to any here because we added activeDiseaseIndex to the payload later
+        if ((caData as any).activeDiseaseIndex !== undefined) {
+            setActiveDiseaseIndex((caData as any).activeDiseaseIndex);
         }
-      } catch { /* fallback to localStorage */ }
-      try {
-        const saved = localStorage.getItem(getDraftKey(hospitalCode, specialty!));
-        if (saved) {
-          const draft = JSON.parse(saved);
-          if (draft.formData) setFormData(draft.formData);
-          if (draft.currentPatient) setCurrentPatient(draft.currentPatient);
-          if (typeof draft.activeDiseaseIndex === "number") setActiveDiseaseIndex(draft.activeDiseaseIndex);
-        }
-      } catch { /* ignore */ }
+      }
     }
-    loadDraft();
-  }, [specialty, hospitalCode, realHospitalName]);
+  }, [specialty]); // ONLY run on mount or specialty change
 
   const handleChange = (patientId: number, questionId: string, value: string) => {
     setFormData({ ...formData, [`${patientId}-${questionId}`]: value });
@@ -163,33 +146,39 @@ export function ClinicalAuditPage() {
 
   const handleSaveDraft = () => {
     if (!specialty) return;
-    const draft = {
-      formData,
-      currentPatient,
-      activeDiseaseIndex,
-      savedAt: new Date().toISOString(),
-    };
-    // Save to localStorage as immediate backup
-    localStorage.setItem(getDraftKey(hospitalCode, specialty), JSON.stringify(draft));
-    // Save to server
-    api.saveDraft("clinical-audit", hospitalCode, specialty, draft).catch((err) => {
-      console.error("Failed to save draft to server:", err);
-    });
+    
+    // 1. Calculate the score BEFORE saving
+    const currentScore = calculateOverallScore(); 
+
+    const draftId = draftManager.getCurrentDraftId();
+    if (draftId) {
+      // 2. Save directly to the single source of truth, including the disease index!
+      draftManager.updateDraft(draftId, specialty, "clinicalAudit", {
+        data: formData,
+        currentPatient,
+        score: currentScore,
+        activeDiseaseIndex, // <--- CRITICAL: Save the active tab!
+        completed: false, 
+      } as any); // Cast to any to accept the extra property
+    }
+    
     setDraftSavedMsg(true);
     setTimeout(() => setDraftSavedMsg(false), 3000);
   };
 
   const handleSubmit = () => {
-    // Also save draft before navigating
-    handleSaveDraft();
+    handleSaveDraft(); // Ensure current state is saved first
     const score = calculateOverallScore();
 
     const draftId = draftManager.getCurrentDraftId();
     if (draftId && specialty) {
       draftManager.updateDraft(draftId, specialty, "clinicalAudit", {
-        score,
-        completed: true,
-      });
+         data: formData,
+         currentPatient,
+         activeDiseaseIndex,
+         score: score,
+         completed: true,
+      } as any);
     }
 
     sessionStorage.setItem(`${specialty}_clinicalAuditScore`, score.toString());
@@ -197,12 +186,16 @@ export function ClinicalAuditPage() {
   };
 
   const handleIsiNanti = () => {
-    handleSaveDraft();
+    handleSaveDraft(); // Ensure current state is saved first
     const draftId = draftManager.getCurrentDraftId();
+    
     if (draftId && specialty) {
       draftManager.updateDraft(draftId, specialty, "clinicalAudit", {
+        data: formData,
+        currentPatient,
+        activeDiseaseIndex,
         completed: false,
-      });
+      } as any);
     }
     navigate(`/siap-persi/patient-report/${specialty}`);
   };

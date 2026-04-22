@@ -26,13 +26,35 @@ export function SiapAdminDashboardPage() {
     const matchesSearch =
       submission.hospitalName.toLowerCase().includes(searchTerm.toLowerCase()) ||
       submission.id.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesStatus =
-      statusFilter === "all" || submission.status?.toLowerCase() === statusFilter?.toLowerCase() || (statusFilter === "rejected" && submission.status?.toLowerCase() === "revision required");
-    const matchesSpecialty =
-      specialtyFilter === "all" || submission.specialty === specialtyFilter;
+    
+    // Improved status matching logic
+    let matchesStatus = false;
+    const subStatus = submission.status?.toLowerCase() || "";
+    
+    if (statusFilter === "all") {
+      matchesStatus = true;
+    } else if (statusFilter === "pending") {
+      matchesStatus = subStatus.includes("pending");
+    } else if (statusFilter === "approved") {
+      matchesStatus = subStatus.includes("approved");
+    } else if (statusFilter === "rejected") {
+      matchesStatus = subStatus.includes("reject") || subStatus.includes("revision");
+    }
+
+    // Specialty matching logic (BULLETPROOF)
+    let matchesSpecialty = false;
+    const subSpecialty = submission.specialty?.toLowerCase() || ""; // Safely fallback if undefined
+    
+    if (specialtyFilter === "all") {
+      matchesSpecialty = true;
+    } else {
+      // Use .includes() to catch variations like "cardiology " or " Cardiology"
+      matchesSpecialty = subSpecialty.includes(specialtyFilter.toLowerCase());
+    }
+      
     return matchesSearch && matchesStatus && matchesSpecialty;
   });
-
+  
   const stats = {
     total: submissions.length,
     pending: submissions.filter(s => s.status?.toLowerCase() === "pending").length,
@@ -178,7 +200,7 @@ export function SiapAdminDashboardPage() {
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
               <Input
                 type="text"
-                placeholder="Cari berdasarkan nama RS atau ID submission..."
+                placeholder="Cari berdasarkan nama RS..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="pl-11 h-11"
@@ -201,9 +223,9 @@ export function SiapAdminDashboardPage() {
               placeholder="Filter Specialty"
               options={[
                 { value: "all", label: "Semua Specialty" },
-                { value: "Cardiology", label: "Cardiology" },
-                { value: "Oncology", label: "Oncology" },
-                { value: "Neurology", label: "Neurology" },
+                { value: "kardiologi", label: "Kardiologi" },
+                { value: "onkologi", label: "Onkologi" },
+                { value: "neurologi", label: "Neurologi" },
               ]}
             />
           </div>

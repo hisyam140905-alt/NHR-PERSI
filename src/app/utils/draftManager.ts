@@ -1,4 +1,5 @@
 import { saveHospitalDraft, getAllHospitalDrafts, deleteHospitalDraft as deleteCloudDraft } from "./api";
+import { specialtyAuditData } from "../data/specialtyAuditData";
 
 // Strict typing applied
 export interface DraftData {
@@ -34,16 +35,40 @@ const DRAFTS_KEY = "siap_persi_drafts";
 
 // THE FIX: A tiny background helper to calculate the hospital code dynamically!
 const getActiveHospitalCode = (): string => {
-  const sessionStr = sessionStorage.getItem("persi_hospital_session");
+  // Check both possible session keys just to be safe
+  const sessionStr = sessionStorage.getItem("persi_hospital_session") || sessionStorage.getItem("hospitalAuth");
   if (!sessionStr) return "HOS001";
 
   try {
     const currentHospital = JSON.parse(sessionStr);
     const realName = currentHospital.hospitalName || currentHospital.hospital_name || "Unknown";
-    return realName !== "Unknown" ? realName.substring(0, 3).toUpperCase() + "001" : "HOS001";
+    
+    // 1. Extract up to the first 2 words and format with hyphen
+    const nameParts = realName.replace(/[^a-zA-Z0-9\s]/g, '').trim().split(/\s+/);
+    const shortName = nameParts.slice(0, 2).join('-').toUpperCase() || "HOS";
+    
+    // 2. Strip out the annoying "hosp-" string from the database ID
+    const cleanId = currentHospital.id ? String(currentHospital.id).replace('hosp-', '') : '';
+
+    // 3. Combine into the clean format
+    return cleanId 
+      ? `${shortName}-${cleanId}` 
+      : currentHospital.email
+        ? `${shortName}-${currentHospital.email.split("@")[0].replace(/[^a-zA-Z0-9]/g, "").toUpperCase()}`
+        : `${shortName}-001`;
   } catch {
     return "HOS001";
   }
+};
+
+// HELPER: Calculates volume weight for Clinical Audit and Patient Report
+const getVolumeWeight = (count: number): number => {
+  if (count === 0) return 0;
+  if (count >= 1 && count <= 5) return 0.80;
+  if (count >= 6 && count <= 10) return 0.85;
+  if (count >= 11 && count <= 15) return 0.90;
+  if (count >= 16 && count <= 20) return 0.95;
+  return 1.0; // 21+ patients
 };
 
 export const draftManager = {
@@ -151,15 +176,39 @@ export const draftManager = {
   },
 
   deleteDraft(draftId: string): void {
+    // 1. Delete from local storage
     const drafts = this.getAllDrafts();
     const filtered = drafts.filter((d) => d.draftId !== draftId);
     localStorage.setItem(DRAFTS_KEY, JSON.stringify(filtered));
 
-    deleteCloudDraft(draftId)
-      .then(success => {
-        if (!success) console.warn("Cloud draft deletion reported failure.");
-      })
-      .catch(err => console.error("Cloud draft deletion threw error:", err));
+    // 🚀 THE ZOMBIE KILLER (Part 1): Add this draft ID to a Blacklist
+    // This ensures syncWithCloud will never accidentally download it again.
+    const deletedDrafts = JSON.parse(localStorage.getItem("siap_persi_deleted_drafts") || "[]");
+    if (!deletedDrafts.includes(draftId)) {
+      deletedDrafts.push(draftId);
+      localStorage.setItem("siap_persi_deleted_drafts", JSON.stringify(deletedDrafts));
+    }
+
+    // 2. Clear current session data
+    if (this.getCurrentDraftId() === draftId) {
+      this.clearCurrentDraftId();
+      sessionStorage.removeItem("selectedSpecialties");
+    }
+
+    // 3. Clean up the Cloud
+    const hCode = getActiveHospitalCode();
+    const cloudDraftKey = `hospital-assessment-${hCode}-all`;
+
+    // Fire BOTH the unique ID and the master key. 
+    // This guarantees the backend will delete it regardless of which query version is live!
+    deleteCloudDraft(draftId).catch(() => {}); 
+    deleteCloudDraft(cloudDraftKey).catch(() => {});
+
+    // 4. Cloud Slot Overwrite: The cloud only has 1 slot per hospital.
+    // If you have other local drafts remaining, we upload the most recent one to overwrite the deleted one.
+    if (filtered.length > 0) {
+      saveHospitalDraft(hCode, "all", filtered[filtered.length - 1] as any).catch(() => {});
+    }
   },
 
   getCurrentDraftId(): string | null {
@@ -177,21 +226,85 @@ export const draftManager = {
   calculateDraftProgress(draft: DraftData) {
     let totalStages = 0;
     let completedStages = 0;
+    let overallPercentage = 0;
+
+    // Details object for the UI to render specific weights and counts
+    const details: Record<string, any> = {};
 
     draft.selectedSpecialties.forEach((specialty) => {
       const progress = draft.progress[specialty];
       if (progress) {
-        totalStages += 3;
-        if (progress.rsbk.completed) completedStages++;
-        if (progress.clinicalAudit.completed) completedStages++;
-        if (progress.patientReport.completed) completedStages++;
+        totalStages += 3; // RSBK, Clinical Audit, Patient Report
+        details[specialty] = {};
+
+        // ==========================================
+        // 1. RSBK Logic: Mimic RsbkFormPage.tsx exactly
+        // ==========================================
+        const specialtyInfo = specialtyAuditData[specialty as keyof typeof specialtyAuditData];
+        const rsbkItems = specialtyInfo ? specialtyInfo.rsbkItems : [];
+        const totalRsbkItems = rsbkItems.length;
+        
+        const rsbkData = progress.rsbk.data || {};
+        
+        // Count how many required items actually have a valid value in the draft
+        const filledRsbkItems = rsbkItems.filter(item => 
+          rsbkData[item.id] !== null && 
+          rsbkData[item.id] !== undefined && 
+          rsbkData[item.id] !== ""
+        ).length;
+
+        const rsbkProgress = totalRsbkItems > 0 ? Math.round((filledRsbkItems / totalRsbkItems) * 100) : 0;
+        const rsbkCompleted = rsbkProgress === 100 || progress.rsbk.completed;
+        
+        if (rsbkCompleted) completedStages++;
+        overallPercentage += rsbkProgress;
+
+        details[specialty].rsbk = {
+          progress: rsbkProgress,
+          filled: filledRsbkItems,
+          total: totalRsbkItems,
+          completed: rsbkCompleted
+        };
+
+        // ==========================================
+        // 2. Clinical Audit Logic: 1 patient = 100%
+        // ==========================================
+        const caPatientCount = progress.clinicalAudit.currentPatient || 0;
+        const caCompleted = caPatientCount > 0 || progress.clinicalAudit.completed;
+        
+        if (caCompleted) completedStages++;
+        overallPercentage += caCompleted ? 100 : 0;
+
+        details[specialty].clinicalAudit = {
+          progress: caCompleted ? 100 : 0,
+          patientCount: caPatientCount,
+          weight: getVolumeWeight(caPatientCount),
+          completed: caCompleted
+        };
+
+        // ==========================================
+        // 3. Patient Report (PREM/PROM) Logic: 1 patient = 100%
+        // ==========================================
+        const prPatientCount = progress.patientReport.patientCount || 0;
+        const prCompleted = prPatientCount > 0 || progress.patientReport.completed;
+        
+        if (prCompleted) completedStages++;
+        overallPercentage += prCompleted ? 100 : 0;
+
+        details[specialty].patientReport = {
+          progress: prCompleted ? 100 : 0,
+          patientCount: prPatientCount,
+          weight: getVolumeWeight(prPatientCount),
+          completed: prCompleted
+        };
       }
     });
 
     return {
       totalStages,
       completedStages,
-      percentage: totalStages > 0 ? Math.round((completedStages / totalStages) * 100) : 0,
+      percentage: totalStages > 0 ? Math.round(overallPercentage / totalStages) : 0,
+      details 
     };
   },
 
@@ -228,12 +341,17 @@ export const draftManager = {
 
       if (cloudDrafts.length > 0) {
         const myCloudDrafts = cloudDrafts.filter(cd => cd.hospitalName === activeName);
-        const localDrafts = this.getAllDrafts().filter(ld => ld.hospitalName === activeName);
+        const allLocalDrafts = this.getAllDrafts();
+        const mergedDrafts = [...allLocalDrafts];
 
-        const mergedDrafts = [...localDrafts];
+        // 🚀 THE ZOMBIE KILLER (Part 2): Load the Blacklist
+        const deletedDrafts = JSON.parse(localStorage.getItem("siap_persi_deleted_drafts") || "[]");
 
         myCloudDrafts.forEach(cd => {
           if (!cd.draftId) return;
+
+          // If this draft is on the blacklist, completely ignore it. DO NOT resurrect!
+          if (deletedDrafts.includes(cd.draftId)) return;
 
           const index = mergedDrafts.findIndex(ld => ld.draftId === cd.draftId);
           if (index === -1) {
@@ -251,4 +369,4 @@ export const draftManager = {
       console.error("Manual cloud sync failed:", err);
     }
   }
-};
+}  

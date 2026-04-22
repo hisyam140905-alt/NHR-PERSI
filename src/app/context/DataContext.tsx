@@ -567,7 +567,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${token}`
         },
-        body: JSON.stringify({ status: "rejected" })
+        body: JSON.stringify({ status: "Revision Required" })
       });
 
       if (response.ok) {

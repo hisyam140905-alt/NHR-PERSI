@@ -523,14 +523,10 @@ export const getAllHospitalDrafts = async (hospitalCode: string, specialty: stri
 
 export const deleteHospitalDraft = async (draftId: string): Promise<boolean> => {
   try {
-    const token = localStorage.getItem("hospitalToken") || localStorage.getItem("token");
-
     const response = await fetch(`${API_BASE_URL}${PREFIX}/drafts/delete/${draftId}`, {
       method: "DELETE",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${token}` // Flash the pass!
-      }
+      // Use the upgraded auth headers so the server doesn't reject the request
+      headers: getAuthHeaders() 
     });
 
     return response.ok;

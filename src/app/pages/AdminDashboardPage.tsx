@@ -490,7 +490,7 @@ function NewsTab({
     content: "",
     category: "berita" as const,
     imageUrl: "",
-    author: "Tim Redaksi PERSI",
+    author: "",
     publishedAt: new Date().toISOString().split("T")[0],
     featured: false,
   });
@@ -501,7 +501,7 @@ function NewsTab({
       ...form,
       imageUrl:
         form.imageUrl ||
-        "https://images.unsplash.com/photo-1687677347190-58c4ebf93bf6?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080",
+        "",
     });
     setForm({
       title: "",
@@ -509,7 +509,7 @@ function NewsTab({
       content: "",
       category: "berita",
       imageUrl: "",
-      author: "Tim Redaksi PERSI",
+      author: "",
       publishedAt: new Date().toISOString().split("T")[0],
       featured: false,
     });
@@ -571,6 +571,15 @@ function NewsTab({
                 />
               </div>
             </div>
+          </div>
+          {/* New Author Field */}
+          <div className="space-y-1.5">
+            <Label className="text-sm font-[600]">Penulis (opsional)</Label>
+            <Input
+              value={form.author}
+              onChange={(e) => setForm({ ...form, author: e.target.value })}
+              placeholder="Default: Tim Redaksi PERSI"
+            />
           </div>
           <div className="space-y-1.5">
             <Label className="text-sm font-[600]">Ringkasan *</Label>
@@ -656,7 +665,7 @@ function NewsTab({
                     </span>
                   </td>
                   <td className="px-5 py-3 text-sm text-gray-500">
-                    {item.author}
+                    {item.author || "Tim Redaksi PERSI"}
                   </td>
                   <td className="px-5 py-3 text-sm text-gray-500">
                     {item.publishedAt}
@@ -713,7 +722,7 @@ function EventsTab({
       ...form,
       imageUrl:
         form.imageUrl ||
-        "https://images.unsplash.com/photo-1627560985113-ab67e8031f40?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080",
+        "",
     });
     setForm({
       title: "",
@@ -812,7 +821,7 @@ function EventsTab({
                 onChange={(e) =>
                   setForm({ ...form, location: e.target.value })
                 }
-                placeholder="Jakarta / Online"
+                placeholder=""
                 required
               />
             </div>

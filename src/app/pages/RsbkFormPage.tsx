@@ -354,14 +354,20 @@ export function RsbkFormPage() {
 
         {/* Action Buttons */}
         <div className="flex gap-4 mt-8">
-          <Button onClick={handleSaveDraft} variant="outline" className="h-12 px-8 border-2 border-gray-300 font-semibold">
+          <Button
+            type="button"
+            onClick={(e) => { e.preventDefault(); handleSaveDraft(); }} variant="outline" className="h-12 px-8 border-2 border-gray-300 font-semibold">
             <Save className="w-5 h-5 mr-2" /> Simpan Draft
           </Button>
-          <Button onClick={handleIsiNanti} variant="outline"
+          <Button
+            type="button"
+            onClick={handleIsiNanti} variant="outline"
             className="h-12 px-8 border-2 border-yellow-400 text-yellow-700 hover:bg-yellow-50 font-semibold">
             Isi Nanti (Lanjut ke Clinical Audit)
           </Button>
-          <Button onClick={handleSubmit} className="flex-1 h-12 bg-[#0F4C81] hover:bg-[#0d3d66] font-semibold">
+          <Button
+            type="button"
+            onClick={handleSubmit} className="flex-1 h-12 bg-[#0F4C81] hover:bg-[#0d3d66] font-semibold">
             Lanjut ke Clinical Audit <ChevronRight className="w-5 h-5 ml-2" />
           </Button>
         </div>

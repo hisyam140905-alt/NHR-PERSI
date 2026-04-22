@@ -35,24 +35,6 @@ export function SiapAdminReviewPage() {
   const [customSurveyDocs, setCustomSurveyDocs] = useState<CustomSurveyDoc[]>([]);
   const [activeTab, setActiveTab] = useState<"summary" | "rsbk" | "audit" | "prm">("summary");
 
-  // Load all custom survey PDFs from localStorage (all hospitals, all specialties)
-  useEffect(() => {
-    const docs: CustomSurveyDoc[] = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key && key.startsWith("custom-survey-")) {
-        try {
-          const raw = localStorage.getItem(key);
-          if (raw) {
-            const parsed = JSON.parse(raw) as CustomSurveyDoc;
-            docs.push(parsed);
-          }
-        } catch { }
-      }
-    }
-    setCustomSurveyDocs(docs);
-  }, []);
-
   const { submissions, approveSubmission, rejectSubmission } = useData();
 
   // Submission data will be loaded from context
@@ -80,12 +62,105 @@ export function SiapAdminReviewPage() {
     details: {}
   };
 
+ // Load custom survey PDFs - "ERA-BASED" TIME BOUNDING
+  useEffect(() => {
+    const safeHospitalName = submissionData.hospitalName || (submissionData as any).hospital_name;
+    if (!safeHospitalName || safeHospitalName === "Memuat...") return;
 
+    const allMatchingDocs: CustomSurveyDoc[] = [];
+
+    // 1. Gather all documents that match the Hospital and Specialty
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith("custom-survey-")) {
+        try {
+          const raw = localStorage.getItem(key);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            const docHospitalName = parsed.hospitalName || parsed.realHospitalName;
+            const isHospitalMatch = docHospitalName?.toLowerCase() === safeHospitalName?.toLowerCase();
+            const isSpecialtyMatch = 
+              parsed.specialty === submissionData.specialty || 
+              parsed.specialty === submissionData.specialtyKey;
+
+            if (isHospitalMatch && isSpecialtyMatch) {
+              allMatchingDocs.push({
+                ...parsed,
+                hospitalName: docHospitalName
+              });
+            }
+          }
+        } catch { }
+      }
+    }
+
+    // --- 2. NARROW DOWN TO EXACT SUBMISSION ERA ---
+    // Helper function to safely parse SQLite dates across all browsers
+    const parseSafeDate = (rawDate: any) => {
+       if (!rawDate || rawDate === "—") return 0;
+       const safeStr = typeof rawDate === "string" ? rawDate.replace(" ", "T") : rawDate;
+       const time = new Date(safeStr).getTime();
+       return isNaN(time) ? 0 : time;
+    };
+
+    // Group and sort all submissions for THIS hospital & specialty chronologically
+    const hospitalSubmissions = submissions
+      .filter(s => 
+        (s.hospitalName === safeHospitalName || (s as any).hospital_name === safeHospitalName) &&
+        (s.specialty === submissionData.specialty || s.specialty === submissionData.specialtyKey)
+      )
+      .sort((a, b) => {
+        return parseSafeDate((a as any).created_at || a.submittedDate) - parseSafeDate((b as any).created_at || b.submittedDate);
+      });
+
+    // Find where the CURRENT submission sits in the timeline
+    const currentIndex = hospitalSubmissions.findIndex(s => s.id === submissionData.id);
+
+    // Define the "Era" (Time Window) for this specific submission
+    // Start Time: Right after the previous submission (if one exists)
+    const prevSub = currentIndex > 0 ? hospitalSubmissions[currentIndex - 1] : null;
+    const startTime = prevSub ? parseSafeDate((prevSub as any).created_at || prevSub.submittedDate) : 0;
+
+    // End Time: Right before the NEXT submission (if one exists)
+    const nextSub = currentIndex < hospitalSubmissions.length - 1 ? hospitalSubmissions[currentIndex + 1] : null;
+    const endTime = nextSub ? parseSafeDate((nextSub as any).created_at || nextSub.submittedDate) : Infinity;
+
+    // A. Filter PDFs that strictly fall into this submission's era
+    const validDocs = allMatchingDocs.filter(doc => {
+       const uploadTime = new Date(doc.uploadedAt).getTime();
+       return uploadTime > startTime && uploadTime <= endTime; 
+    });
+
+    // B. Group by Disease Tab and pick the SINGLE most recent valid PDF from this era
+    const latestDocsPerDisease = new Map<string, CustomSurveyDoc>();
+    validDocs.forEach(doc => {
+       const existing = latestDocsPerDisease.get(doc.diseaseName);
+       if (!existing || new Date(doc.uploadedAt).getTime() > new Date(existing.uploadedAt).getTime()) {
+           latestDocsPerDisease.set(doc.diseaseName, doc);
+       }
+    });
+
+    setCustomSurveyDocs(Array.from(latestDocsPerDisease.values()));
+    
+  // Added 'submissions' to dependency array so it can accurately calculate the era
+  }, [
+    submissions,
+    submissionData.id,
+    submissionData.hospitalName, 
+    submissionData.specialty, 
+    submissionData.specialtyKey, 
+    (submissionData as any).hospital_name
+  ]);
+
+// Add these safe fallbacks right after submissionData is defined
+  const safeRsbk = Number(submissionData.scores.rsbk || (submissionData.scores as any).rsbkScore || 0);
+  const safeAudit = Number(submissionData.scores.clinicalAudit || (submissionData.scores as any).audit || (submissionData.scores as any).auditScore || 0);
+  const safePrm = Number(submissionData.scores.patientReport || (submissionData.scores as any).prm || (submissionData.scores as any).prmScore || 0);
 
   const radarData = [
-    { category: "Hospital Structure", value: submissionData.scores.rsbk as number },
-    { category: "Clinical Audit", value: submissionData.scores.clinicalAudit as number },
-    { category: "Patient Report", value: submissionData.scores.patientReport as number },
+    { category: "Hospital Structure", value: safeRsbk },
+    { category: "Clinical Audit", value: safeAudit },
+    { category: "Patient Report", value: safePrm },
   ];
 
   const getTier = (score: number) => {
@@ -240,23 +315,23 @@ export function SiapAdminReviewPage() {
               <div className="space-y-4">
                 <ScoreRow
                   label="Hospital Structure"
-                  score={submissionData.scores.rsbk as number}
+                  score={safeRsbk}
                   weight="15%"
-                  weighted={((submissionData.scores.rsbk as number) * 0.15).toFixed(1)}
+                  weighted={(safeRsbk * 0.15).toFixed(1)}
                   color="blue"
                 />
                 <ScoreRow
                   label="Clinical Audit"
-                  score={submissionData.scores.clinicalAudit as number}
+                  score={safeAudit}
                   weight="60%"
-                  weighted={((submissionData.scores.clinicalAudit as number) * 0.6).toFixed(1)}
+                  weighted={(safeAudit * 0.6).toFixed(1)}
                   color="purple"
                 />
                 <ScoreRow
                   label="Patient Report"
-                  score={submissionData.scores.patientReport as number}
+                  score={safePrm}
                   weight="25%"
-                  weighted={((submissionData.scores.patientReport as number) * 0.25).toFixed(1)}
+                  weighted={(safePrm * 0.25).toFixed(1)}
                   color="teal"
                 />
               </div>
@@ -400,33 +475,15 @@ export function SiapAdminReviewPage() {
             <p className="text-gray-500 text-sm mb-6 font-medium">Hasil evaluasi kepatuhan protokol klinis per item pertanyaan.</p>
 
             <div className="grid gap-3">
-              {(() => {
-                const specData = specialtyAuditData[(submissionData as any).specialtyKey] || specialtyAuditData.cardiology;
-                const questions = specData.auditQuestions;
-                const data = (submissionData as any).details?.auditData || {};
-
-                if (Object.keys(data).length === 0) return <p className="text-amber-600 text-sm italic">Data rincian audit klinis tidak tersedia.</p>;
-
-                return questions.map(q => {
-                  const val = data[q.id] || "0"; // val is "1" (yes) or "2" (no)
-                  return (
-                    <ParameterRow
-                      key={q.id}
-                      item={{
-                        name: q.question,
-                        value: val,
-                        score: val === "1" ? 100 : 0,
-                        detail: val === "1" ? "Patuh / Terpenuhi" : "Tidak Terpenuhi"
-                      }}
-                    />
-                  );
-                });
-              })()}
+              <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg">
+                 <p className="text-amber-700 text-sm font-semibold">Data rincian audit klinis tidak tersedia.</p>
+                 <p className="text-amber-600 text-xs mt-1">Detail evaluasi per rekam medis pasien disimpan secara internal oleh rumah sakit (Privasi Data Medis).</p>
+              </div>
             </div>
           </div>
         )}
 
-        {/* --- TAB CONTENT: PATIENT REPORT (PRM) --- */}
+       {/* --- TAB CONTENT: PATIENT REPORT (PRM) --- */}
         {activeTab === "prm" && (
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 mb-8">
             <div className="bg-white rounded-xl border border-gray-200 p-8 shadow-sm">
@@ -441,27 +498,10 @@ export function SiapAdminReviewPage() {
                     Patient Experience (PREM)
                   </h4>
                   <div className="grid gap-3">
-                    {(() => {
-                      const specData = specialtyAuditData[(submissionData as any).specialtyKey] || specialtyAuditData.cardiology;
-                      const data = (submissionData as any).details?.prmData || {};
-
-                      if (Object.keys(data).length === 0) return <p className="text-amber-600 text-sm italic">Data survei PREM tidak tersedia.</p>;
-
-                      return specData.premQuestions.map(q => {
-                        const val = data[q.id] || "0"; // score 0-5
-                        return (
-                          <ParameterRow
-                            key={q.id}
-                            item={{
-                              name: q.question,
-                              value: "1",
-                              score: parseInt(val) * 20, // Normalize to 100
-                              detail: `Skor Pasien: ${val}/5`
-                            }}
-                          />
-                        );
-                      });
-                    })()}
+                    <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg">
+                       <p className="text-amber-700 text-sm font-semibold">Data survei PREM tidak tersedia.</p>
+                       <p className="text-amber-600 text-xs mt-1">Rincian kuesioner pengalaman pasien dilindungi untuk menjaga kerahasiaan responden.</p>
+                    </div>
                   </div>
                 </div>
 
@@ -472,27 +512,10 @@ export function SiapAdminReviewPage() {
                     Patient Outcome (PROM)
                   </h4>
                   <div className="grid gap-3">
-                    {(() => {
-                      const specData = specialtyAuditData[(submissionData as any).specialtyKey] || specialtyAuditData.cardiology;
-                      const data = (submissionData as any).details?.prmData || {};
-
-                      if (Object.keys(data).length === 0) return <p className="text-amber-600 text-sm italic">Data survei PROM tidak tersedia.</p>;
-
-                      return specData.promQuestions.map(q => {
-                        const val = data[q.id] || "0";
-                        return (
-                          <ParameterRow
-                            key={q.id}
-                            item={{
-                              name: q.question,
-                              value: "1",
-                              score: parseInt(val) * 20, // Normalize to 100
-                              detail: `Hasil Klinis: ${val}/5`
-                            }}
-                          />
-                        );
-                      });
-                    })()}
+                    <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg">
+                       <p className="text-amber-700 text-sm font-semibold">Data survei PROM tidak tersedia.</p>
+                       <p className="text-amber-600 text-xs mt-1">Rincian hasil klinis pasien dilindungi untuk menjaga kerahasiaan responden.</p>
+                    </div>
                   </div>
                 </div>
               </div>

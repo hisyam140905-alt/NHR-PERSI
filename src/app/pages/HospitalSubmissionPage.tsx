@@ -40,10 +40,23 @@ export function HospitalSubmissionPage() {
     return null;
   }
 
-  // 1. Calculate the code dynamically using our rock-solid currentHospital state!
-  const realHospitalName = currentHospital?.hospitalName || currentHospital?.hospitalName || "RSX";
-  const hospitalCode = realHospitalName.substring(0, 3).toUpperCase() + "001";
+ // 1. Calculate the code dynamically using our rock-solid currentHospital state!
+  const realHospitalName = currentHospital?.hospitalName || "Unknown Hospital";
+  
+  // 1. Extract up to the first 2 words and format with hyphen
+  const nameParts = realHospitalName.replace(/[^a-zA-Z0-9\s]/g, '').trim().split(/\s+/);
+  const shortName = nameParts.slice(0, 2).join('-').toUpperCase() || "HOS";
+  
+  // 2. Strip out the annoying "hosp-" string from the database ID
+  const cleanId = currentHospital?.id ? String(currentHospital.id).replace('hosp-', '') : '';
 
+  // 3. Combine into the clean format
+  const hospitalCode = cleanId 
+    ? `${shortName}-${cleanId}` 
+    : currentHospital?.email
+      ? `${shortName}-${currentHospital.email.split("@")[0].replace(/[^a-zA-Z0-9]/g, "").toUpperCase()}`
+      : `${shortName}-001`;
+      
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-teal-50 py-12">
       <div className="max-w-4xl mx-auto px-6">
