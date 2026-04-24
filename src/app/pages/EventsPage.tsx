@@ -102,8 +102,13 @@ export function EventsPage() {
                         <span>{event.location}</span>
                       </div>
                     </div>
-                    {event.registrationUrl && (
-                      <Button className="w-fit bg-[#1E3A8A] hover:bg-[#1a3278] font-[600]">
+                    
+                    {/* ✅ TOMBOL DAFTAR SEKARANG YANG SUDAH DIPERBARUI */}
+                    {event.registrationUrl && event.registrationUrl !== "#" && (
+                      <Button 
+                        className="w-fit bg-[#1E3A8A] hover:bg-[#1a3278] font-[600]"
+                        onClick={() => window.open(event.registrationUrl, "", "noopener,noreferrer")}
+                      >
                         <ExternalLink className="w-4 h-4 mr-2" />
                         Daftar Sekarang
                       </Button>
@@ -185,8 +190,12 @@ function EventCard({
           <MapPin className="w-3 h-3" />
           <span className="truncate">{event.location}</span>
         </div>
-        {!isPast && event.registrationUrl && (
-          <Button size="sm" className="mt-4 w-full bg-[#1E3A8A] hover:bg-[#1a3278] font-[600] text-xs">
+        {!isPast && event.registrationUrl && event.registrationUrl !== "#" && (
+          <Button 
+            size="sm" 
+            className="mt-4 w-full bg-[#1E3A8A] hover:bg-[#1a3278] font-[600] text-xs"
+            onClick={() => window.open(event.registrationUrl, "_blank", "noopener,noreferrer")}
+          >
             Daftar
           </Button>
         )}

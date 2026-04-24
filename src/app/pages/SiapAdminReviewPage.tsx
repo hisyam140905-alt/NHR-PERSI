@@ -8,7 +8,7 @@ import {
   ArrowLeft,
   FileText,
   ExternalLink,
-  Clock
+  Clock, X 
 } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { Textarea } from "../components/ui/textarea";
@@ -34,6 +34,29 @@ export function SiapAdminReviewPage() {
   const [action, setAction] = useState<"approve" | "reject" | "">("");
   const [customSurveyDocs, setCustomSurveyDocs] = useState<CustomSurveyDoc[]>([]);
   const [activeTab, setActiveTab] = useState<"summary" | "rsbk" | "audit" | "prm">("summary");
+
+  const [viewPdfUrl, setViewPdfUrl] = useState<string | null>(null);
+  const [viewPdfName, setViewPdfName] = useState("");
+
+  const createPdfBlobUrl = (base64Data: string) => {
+    try {
+      let base64WithoutPrefix = base64Data.includes(',')
+        ? base64Data.split(',')[1]
+        : base64Data;
+      base64WithoutPrefix = base64WithoutPrefix.replace(/\s/g, '');
+      const byteCharacters = atob(base64WithoutPrefix);
+      const byteNumbers = new Array(byteCharacters.length);
+      for (let i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i);
+      }
+      const byteArray = new Uint8Array(byteNumbers);
+      const blob = new Blob([byteArray], { type: 'application/pdf' });
+      return URL.createObjectURL(blob);
+    } catch (error) {
+      console.error("🔥 FATAL ERROR CONVERTING PDF:", error);
+      return null;
+    }
+  };
 
   const { submissions, approveSubmission, rejectSubmission } = useData();
 
@@ -566,15 +589,70 @@ export function SiapAdminReviewPage() {
                         </p>
                       </div>
                       <div className="flex gap-2 flex-shrink-0">
-                        <a href={doc.base64} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold text-indigo-700 bg-indigo-100 hover:bg-indigo-200 rounded-lg transition-colors">
+                        <button
+                          onClick={() => {
+                            const safeBlobUrl = createPdfBlobUrl(doc.base64);
+                            if (safeBlobUrl) {
+                              setViewPdfUrl(safeBlobUrl);
+                              setViewPdfName(doc.fileName || "Survei_Mandiri.pdf");
+                            } else {
+                              alert("Data PDF tidak valid atau gagal dikonversi.");
+                            }
+                          }}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold text-indigo-700 bg-indigo-100 hover:bg-indigo-200 rounded-lg transition-colors"
+                        >
                           <ExternalLink className="w-4 h-4" />
                           Buka
-                        </a>
+                        </button>
                       </div>
                     </div>
                   ))}
                 </div>
               )}
+               {/* ✅ TAMBAHKAN MODAL PDF VIEWER DI SINI */}
+        {viewPdfUrl && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-6"
+            onClick={() => {
+              if (viewPdfUrl) URL.revokeObjectURL(viewPdfUrl);
+              setViewPdfUrl(null);
+            }}>
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between p-5 border-b border-gray-200">
+                <div className="flex items-center gap-3">
+                  <FileText className="w-5 h-5 text-indigo-600" />
+                  <div>
+                    <h3 className="font-[700] text-gray-900">Dokumen Survei Mandiri</h3>
+                    <p className="text-xs text-gray-500">{viewPdfName}</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  {/* Fallback Download */}
+                  <a
+                    href={viewPdfUrl}
+                    download={viewPdfName || "Survei_Mandiri.pdf"}
+                    className="px-4 py-1.5 bg-indigo-50 text-indigo-700 text-sm font-[600] rounded-lg hover:bg-indigo-100 transition-colors"
+                  >
+                    Download PDF
+                  </a>
+                  <button onClick={() => {
+                    if (viewPdfUrl) URL.revokeObjectURL(viewPdfUrl);
+                    setViewPdfUrl(null);
+                  }} className="p-2 rounded-full hover:bg-gray-100">
+                    <X className="w-5 h-5 text-gray-500" />
+                  </button>
+                </div>
+              </div>
+              <div className="flex-1 p-2">
+                <iframe
+                  src={viewPdfUrl}
+                  className="w-full h-full rounded-lg border border-gray-200"
+                  title="Survei Mandiri PDF"
+                />
+                       </div>
+                    </div>
+                  </div>
+                 )}
             </div>
           </div>
         )}

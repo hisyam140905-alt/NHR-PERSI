@@ -826,6 +826,16 @@ function EventsTab({
               />
             </div>
           </div>
+          
+          <div className="space-y-1.5">
+            <Label className="text-sm font-[600]">Link Registrasi (opsional)</Label>
+            <Input
+              value={form.registrationUrl === "#" ? "" : form.registrationUrl}
+              onChange={(e) => setForm({ ...form, registrationUrl: e.target.value })}
+              placeholder=""
+            />
+          </div>
+
           <div className="space-y-1.5">
             <Label className="text-sm font-[600]">Gambar Cover (opsional)</Label>
             <ImageDropzone onImageChange={(base64) => setForm({ ...form, imageUrl: base64 || "" })} />
