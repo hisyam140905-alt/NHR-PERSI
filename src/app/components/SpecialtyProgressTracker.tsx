@@ -1,6 +1,7 @@
 import { Heart, Brain, Activity } from "lucide-react";
 import { useNavigate } from "react-router";
 import { draftManager } from "../utils/draftManager";
+import { useState, useEffect } from "react";
 
 const specialtyIcons: Record<string, React.ReactNode> = {
   cardiology: <Heart className="w-5 h-5" />,
@@ -45,7 +46,6 @@ export function SpecialtyProgressTracker({
   const currentIndex = selectedSpecialties.indexOf(currentSpecialty);
 
   const stages = ["rsbk", "clinical-audit", "patient-report", "result"];
-  const currentStageIndex = stages.indexOf(currentStage);
 
   const navigateToSpecialty = (spec: string, stage: string) => {
     if (stage === "rsbk") navigate(`/siap-persi/rsbk/${spec}`);
@@ -54,9 +54,26 @@ export function SpecialtyProgressTracker({
     else navigate(`/siap-persi/result/${spec}`);
   };
 
-  const draftId = draftManager.getCurrentDraftId();
-  const draft = draftId ? draftManager.getDraftById(draftId) : null;
-  const progressMap = draft?.progress[currentSpecialty];
+  // --- THE FIX: State-driven data fetching ---
+  const [progressMap, setProgressMap] = useState<any>(null);
+
+  useEffect(() => {
+    const fetchDraftData = () => {
+      const draftId = draftManager.getCurrentDraftId();
+      const draft = draftId ? draftManager.getDraftById(draftId) : null;
+      if (draft && draft.progress) {
+        setProgressMap(draft.progress[currentSpecialty]);
+      }
+    };
+
+    fetchDraftData(); // Grab whatever is currently there
+
+    // The Magic: Wait 50ms for the previous page to completely finish unmounting & saving
+    // before re-checking the local storage for the fresh data!
+    const timer = setTimeout(fetchDraftData, 50); 
+    
+    return () => clearTimeout(timer);
+  }, [currentSpecialty, currentStage]);
 
   return (
     <div className="bg-white rounded-xl border-2 border-[#0F4C81] p-6 mb-6">
@@ -117,12 +134,23 @@ export function SpecialtyProgressTracker({
 
       {/* Stage Navigation (within same specialty) */}
       <div className="flex gap-1 mb-3">
-        {stages.map((stage, idx) => {
+        {stages.map((stage) => {
           const isCurrent = stage === currentStage;
-          const isPast = idx < currentStageIndex;
           
           const draftStageKey = stage === "rsbk" ? "rsbk" : stage === "clinical-audit" ? "clinicalAudit" : stage === "patient-report" ? "patientReport" : "result";
           const isCompleted = progressMap && draftStageKey !== "result" ? progressMap[draftStageKey as keyof typeof progressMap]?.completed : false;
+
+          // QoL 2: Check if there is actual data inside the draft to mark it yellow, ignoring sequential order
+          const checkIsInProgress = (stageKey: string) => {
+            if (!progressMap || stageKey === "result") return false;
+            const stageData = progressMap[stageKey as keyof typeof progressMap];
+            if (stageKey === "clinicalAudit") {
+              return (stageData?.data && Object.keys(stageData.data).length > 0) || ((stageData as any)?.currentPatient && (stageData as any)?.currentPatient > 1);
+            }
+            return stageData?.data && Object.keys(stageData.data).length > 0;
+          };
+
+          const isInProgress = checkIsInProgress(draftStageKey);
 
           return (
             <button
@@ -133,7 +161,7 @@ export function SpecialtyProgressTracker({
                   ? "bg-[#0F4C81] text-white"
                   : isCompleted
                   ? "bg-green-100 text-green-700 hover:bg-green-200"
-                  : isPast
+                  : isInProgress
                   ? "bg-yellow-100 text-yellow-700 hover:bg-yellow-200"
                   : "bg-gray-100 text-gray-500 hover:bg-gray-200"
               }`}

@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { useData } from "../context/DataContext";
+import { Toaster } from "./ui/sonner";
 
 export function Root() {
   const location = useLocation();
@@ -350,6 +351,10 @@ export function Root() {
           </div>
         </div>
       </footer>
+
+      {/* NEW: Global Toaster */}
+      <Toaster position="top-right" richColors theme="light" />
     </div>
   );
 }
+ 

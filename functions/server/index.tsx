@@ -8,7 +8,7 @@ declare const Deno: {
 
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
-import { createClient } from "@libsql/client/web";
+import { createClient, type Row } from "@libsql/client/web";
 import { jwt, sign } from "hono/jwt";
 import * as bcrypt from "bcryptjs";
 
@@ -229,6 +229,21 @@ async function initDb() {
       console.error("DB init error for statement:", err);
     }
   }
+
+  // Add columns to pre-existing tables that were created without them
+  const migrations = [
+    "ALTER TABLE surveys ADD COLUMN hospitalCode TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE surveys ADD COLUMN hospital_code TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE patients ADD COLUMN hospitalCode TEXT NOT NULL DEFAULT ''",
+  ];
+  for (const sql of migrations) {
+    try {
+      await db.execute(sql);
+    } catch (_) {
+      // Column already exists — safe to ignore
+    }
+  }
+
   console.log("✅ Database tables initialized.");
 }
 
@@ -501,9 +516,68 @@ app.post("/make-server-5e1d66c4/admin/login", async (c: Context) => {
     return c.json({ error: "Login failed" }, 500);
   }
 });
-// ============ PROTECTED ROUTES ============
-// Ensure ALL new routes are protected by the JWT middleware
+
+// ============ PUBLIC ROUTES (No Token Required) ============
+
+// 1. MOVE THE PATIENT POST ROUTE HERE (Above the JWT line!)
+app.post("/make-server-5e1d66c4/surveys/:hospitalCode/:specialty", async (c: Context) => {
+  try {
+    const { hospitalCode, specialty } = c.req.param();
+    const survey = await c.req.json();
+    const id = Date.now().toString(36) + Math.random().toString(36).substring(2);
+
+    const existing = await db.execute({
+      sql: "SELECT id FROM surveys WHERE hospitalCode = ? AND specialty = ? AND patient_rm = ?",
+      args: [hospitalCode, specialty, survey.medicalRecordNumber || survey.qRm || ""]
+    });
+
+    if (existing.rows.length > 0) {
+      return c.json({ error: "Pasien ini sudah mengisi survei.", success: false, duplicate: true }, 409);
+    }
+
+    await db.execute({
+      sql: `INSERT INTO surveys (id, hospitalCode, hospital_code, specialty, patient_name, patient_rm, prem_score, prom_score, overall_score, answers)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [
+        id,
+        hospitalCode,
+        hospitalCode,
+        specialty,
+        survey.patientName || survey.qName || "",
+        survey.medicalRecordNumber || survey.qRm || "",
+        survey.premScore ?? 0,
+        survey.promScore ?? 0,
+        survey.overallScore ?? 0,
+        JSON.stringify(survey.answers || {})
+      ]
+    });
+
+    return c.json({ success: true, surveyId: id });
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : "Unknown error";
+    console.error("Error submitting survey:", errorMessage);
+    return c.json({ error: `Failed to submit survey: ${errorMessage}` }, 500);
+  }
+});
+
+
+// ============ PROTECTED ROUTES (Requires Admin Login) ============
+// Ensure ALL admin routes below this line are protected by the JWT middleware
 app.use('/make-server-5e1d66c4/surveys/*', jwt({ secret: JWT_SECRET, alg: 'HS256' }));
+app.use('/make-server-5e1d66c4/patients/*', jwt({ secret: JWT_SECRET, alg: 'HS256' }));
+
+
+
+// Ensure ALL new routes are protected by the JWT middleware
+app.use('/make-server-5e1d66c4/surveys/*', async (c, next) => {
+  // Patient survey submissions are public — patients scanning QR codes have no auth token.
+  // All other survey operations (GET, DELETE, bulk POST) remain JWT-protected.
+  if (c.req.method === 'POST' && !c.req.path.endsWith('/bulk')) {
+    await next();
+    return;
+  }
+  await jwt({ secret: JWT_SECRET, alg: 'HS256' })(c, next);
+});
 app.use('/make-server-5e1d66c4/patients/*', jwt({ secret: JWT_SECRET, alg: 'HS256' }));
 app.use('/make-server-5e1d66c4/drafts/*', jwt({ secret: JWT_SECRET, alg: 'HS256' }));
 app.use('/make-server-5e1d66c4/hospital/accounts*', jwt({ secret: JWT_SECRET, alg: 'HS256' }));
@@ -519,7 +593,8 @@ app.get("/make-server-5e1d66c4/surveys/:hospitalCode/:specialty", async (c: Cont
   try {
     const { hospitalCode, specialty } = c.req.param();
     const rs = await db.execute({
-      sql: "SELECT * FROM surveys WHERE hospitalCode = ? AND specialty = ? ORDER BY registeredAt DESC",
+      // ✅ THE FIX: Use "created_at" to match the table schema
+      sql: "SELECT * FROM surveys WHERE hospitalCode = ? AND specialty = ? ORDER BY created_at DESC",
       args: [hospitalCode, specialty]
     });
 
@@ -533,7 +608,7 @@ app.get("/make-server-5e1d66c4/surveys/:hospitalCode/:specialty", async (c: Cont
         promScore: row.prom_score,
         overallScore: row.overall_score,
         answers: row.answers ? JSON.parse(row.answers) : {},
-        timestamp: row.created_at
+        submittedAt: row.created_at
       };
     });
 
@@ -562,10 +637,11 @@ app.post("/make-server-5e1d66c4/surveys/:hospitalCode/:specialty", async (c: Con
     }
 
     await db.execute({
-      sql: `INSERT INTO surveys (id, hospitalCode, specialty, patient_name, patient_rm, prem_score, prom_score, overall_score, answers)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      sql: `INSERT INTO surveys (id, hospitalCode, hospital_code, specialty, patient_name, patient_rm, prem_score, prom_score, overall_score, answers)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [
         id,
+        hospitalCode,
         hospitalCode,
         specialty,
         survey.patientName || survey.qName || "",
@@ -595,9 +671,9 @@ app.post("/make-server-5e1d66c4/surveys/:hospitalCode/:specialty/bulk", async (c
     const statements = surveys.map((survey: SurveyInput) => {
       const id = Date.now().toString(36) + Math.random().toString(36).substring(2);
       return {
-        sql: `INSERT INTO surveys (id, hospitalCode, specialty, patient_name, patient_rm, prem_score, prom_score, overall_score, answers) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        sql: `INSERT INTO surveys (id, hospitalCode, hospital_code, specialty, patient_name, patient_rm, prem_score, prom_score, overall_score, answers) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         args: [
-          id, hospitalCode, specialty, survey.patientName || survey.qName || "",
+          id, hospitalCode, hospitalCode, specialty, survey.patientName || survey.qName || "",
           survey.medicalRecordNumber || survey.qRm || "", survey.premScore ?? 0,
           survey.promScore ?? 0, survey.overallScore ?? 0, JSON.stringify(survey.answers || {})
         ]
@@ -1031,7 +1107,7 @@ app.post("/news", async (c: Context) => {
 app.get("/news", async (c: Context) => {
   try {
     const rs = await db.execute("SELECT * FROM news ORDER BY publishedAt DESC");
-    const news = rs.rows.map((row: any) => ({
+    const news = rs.rows.map((row: Row) => ({
       id: row.id,
       title: row.title,
       excerpt: row.excerpt,
@@ -1086,7 +1162,7 @@ app.post("/events", async (c: Context) => {
 app.get("/events", async (c: Context) => {
   try {
     const rs = await db.execute("SELECT * FROM events ORDER BY date ASC");
-    const events = rs.rows.map((row: any) => ({
+    const events = rs.rows.map((row: Row) => ({
       id: row.id,
       title: row.title,
       description: row.description,

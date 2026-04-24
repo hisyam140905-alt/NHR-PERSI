@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
-import { useParams, Link, useNavigate } from "react-router";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { useParams, useNavigate } from "react-router";
 import {
   MessageSquare,
   Heart,
@@ -19,6 +19,7 @@ import {
   FileUp,
   UploadCloud,
   FileText,
+  ArrowLeft
 } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { QRCodeDisplay } from "../components/QRCodeGenerator";
@@ -27,6 +28,7 @@ import { SpecialtyProgressTracker } from "../components/SpecialtyProgressTracker
 import type { PatientSurveyResponse } from "./PatientPremPromPage";
 import * as api from "../utils/api";
 import { draftManager } from "../utils/draftManager";
+import { toast } from "sonner";
 
 interface RegisteredPatient {
   id: string;
@@ -86,7 +88,6 @@ export function PatientReportPage() {
   const [newPatientName, setNewPatientName] = useState("");
   const [newPatientRM, setNewPatientRM] = useState("");
   const [registerError, setRegisterError] = useState("");
-  const [draftSavedMsg, setDraftSavedMsg] = useState(false);
   const [loading, setLoading] = useState(true);
   
   // Custom hospital survey upload
@@ -166,9 +167,9 @@ export function PatientReportPage() {
         setCustomSurveyFileName(file.name);
         setCustomSurveyPatientCount(doc.patientCount);
         setCustomSurveyUploaded(true);
-        alert(`File PDF survei internal untuk jenis penyakit ${activeDisease?.diseaseName} berhasil diunggah!`);
+        toast.success("Upload Berhasil", { description: `File PDF survei untuk ${activeDisease?.diseaseName} telah diunggah!` });
       } catch (err) {
-        alert("Gagal mengunggah file. Mungkin ukuran terlalu besar (Storage Penuh/Melebihi Kuota).");
+        toast.error("Gagal Mengunggah", { description: "Mungkin ukuran terlalu besar (Storage Penuh/Melebihi Kuota)." });
       }
       
       e.target.value = ""; // Reset input cache for future uploads
@@ -352,57 +353,87 @@ export function PatientReportPage() {
 
   const handleCopyLink = (patient: RegisteredPatient) => {
     navigator.clipboard.writeText(buildSurveyUrl(patient));
-    alert(`Link survei untuk ${patient.name} telah disalin!`);
+    toast.success("Link Tersalin!", { description: `Link survei untuk ${patient.name} telah disalin ke clipboard.` });
   };
 
-  // Save draft
-  const handleSaveDraft = async () => {
+  // --- QoL 1: Auto-Save State Interceptors ---
+  const isNavigatingAwayRef = useRef(false);
+
+  // Deep-compare string to prevent the 3-second polling interval from triggering infinite saves
+  const registeredPatientsString = JSON.stringify(registeredPatients);
+
+  useEffect(() => {
+    if (isNavigatingAwayRef.current) return;
+    
+    const draftId = draftManager.getCurrentDraftId();
+    if (draftId && specialty) {
+      draftManager.updateDraft(draftId, specialty, "patientReport", {
+        data: { registeredPatients }, // Use the actual object, not the string
+        patientCount,
+        score: overallScore,
+        completed: false,
+      });
+    }
+    // We explicitly track the stringified version so polling doesn't trigger this!
+  }, [registeredPatientsString, patientCount, overallScore, specialty]);
+
+  // --- Adjusted Button Handlers ---
+  const handleSaveDraft = async (showToast = true) => {
     if (!specialty) return;
+    
+    // We only call the specific patient-report draft here.
+    // draftManager.updateDraft is ALREADY handling the master hospital-assessment draft.
     try {
       await api.saveDraft("patient-report", hospitalCode, specialty, {
         registeredPatients,
       });
-      setDraftSavedMsg(true);
-      setTimeout(() => setDraftSavedMsg(false), 3000);
+      
+      if (showToast) {
+        toast.success("Draft Tersimpan", { description: "Progress Patient Report berhasil diamankan." });
+      }
     } catch (err) {
-      console.error("Failed to save draft:", err);
+      console.error("Failed to save cloud draft:", err);
     }
   };
 
-  const draftId = draftManager.getCurrentDraftId();
-  if (draftId && specialty) {
-    draftManager.updateDraft(draftId, specialty, "patientReport", {
-      data: { registeredPatients },
-      patientCount: registeredPatients.length,
-      completed: false,
-    });
-  }
-
   const handleContinue = async () => {
-    await handleSaveDraft();
-
+    // 1. Lock the auto-saver so it doesn't fire concurrently
+    isNavigatingAwayRef.current = true; 
+    
     const draftId = draftManager.getCurrentDraftId();
     if (draftId && specialty) {
+      // 2. This updates local storage AND fires the first cloud save (hospital-assessment)
       draftManager.updateDraft(draftId, specialty, "patientReport", {
         score: overallScore,
         patientCount,
-        completed: true,
+        completed: true, 
       });
     }
+
+    // 3. Give SQLite a tiny 150ms breathing room before firing the second write
+    await new Promise(resolve => setTimeout(resolve, 150));
+    
+    // 4. Fire the second cloud save (patient-report backup)
+    await handleSaveDraft(false);
 
     sessionStorage.setItem(`${specialty}_patientReportScore`, overallScore.toString());
     navigate(`/siap-persi/result/${specialty}`);
   };
 
   const handleIsiNanti = async () => {
-    await handleSaveDraft();
-    const draftId = draftManager.getCurrentDraftId();
-    if (draftId && specialty) {
-      draftManager.updateDraft(draftId, specialty, "patientReport", {
-        completed: false,
-      });
-    }
+    isNavigatingAwayRef.current = true;
+    
+    // Give SQLite a 150ms buffer in case the useEffect fired right before clicking
+    await new Promise(resolve => setTimeout(resolve, 150));
+    await handleSaveDraft(false);
+    
     navigate(`/siap-persi/result/${specialty}`);
+  };
+
+  const handleBackToPortal = async () => {
+    isNavigatingAwayRef.current = true;
+    await handleSaveDraft(false); // Silent save
+    navigate("/hospital-login"); 
   };
 
   // Get survey response for a patient (for review)
@@ -429,22 +460,16 @@ export function PatientReportPage() {
         {/* Multi-Specialty Progress */}
         <SpecialtyProgressTracker currentSpecialty={specialty || ""} currentStage="patient-report" />
 
-        {/* Draft Saved Toast */}
-        {draftSavedMsg && (
-          <div className="fixed top-6 right-6 z-50 bg-green-600 text-white px-6 py-3 rounded-xl shadow-lg flex items-center gap-2">
-            <CheckCircle2 className="w-5 h-5" />
-            <span className="font-semibold">Draft berhasil disimpan!</span>
-          </div>
-        )}
-
         {/* Header */}
         <div className="mb-6">
-          <Link
-            to={`/siap-persi/clinical-audit/${specialty}`}
-            className="inline-flex items-center text-[#0F4C81] hover:underline mb-4"
+          <Button 
+            variant="ghost" 
+            onClick={handleBackToPortal} 
+            className="text-[#0F4C81] hover:text-[#0d3d66] hover:bg-blue-50 px-3 h-9 mb-4 -ml-3 transition-colors"
           >
-            &larr; Kembali ke Clinical Audit
-          </Link>
+            <ArrowLeft className="w-4 h-4 mr-2" />
+            Kembali ke Portal RS
+          </Button>
           <h1 className="text-4xl font-bold text-gray-900 mb-2">
             Patient Reported Measurement
           </h1>
@@ -1251,7 +1276,7 @@ function PatientQRModal({
 }) {
   const handleCopy = () => {
     navigator.clipboard.writeText(surveyUrl);
-    alert("Link survei telah disalin ke clipboard!");
+    toast.success("Link Tersalin!", { description: "Link survei telah disalin ke clipboard." });
   };
 
   const handleDownload = () => {

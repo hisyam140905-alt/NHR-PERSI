@@ -1,10 +1,11 @@
-import { useState, useEffect } from "react";
-import { useParams, Link, useNavigate } from "react-router";
-import { Users, Building2, Stethoscope, ChevronRight, Save, Target, BedDouble, DoorOpen } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { useParams, useNavigate } from "react-router";
+import { Users, Building2, Stethoscope, ChevronRight, Save, Target, BedDouble, DoorOpen, ArrowLeft } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { specialtyAuditData, RsbkItem } from "../data/specialtyAuditData";
 import { SpecialtyProgressTracker } from "../components/SpecialtyProgressTracker";
 import { draftManager } from "../utils/draftManager";
+import { toast } from "sonner";
 
 export function RsbkFormPage() {
   const { specialty } = useParams<{ specialty: string }>();
@@ -91,7 +92,35 @@ export function RsbkFormPage() {
   const sarprasSubScore = sarprasTargetPoints > 0 ? Number(((sarprasPoints / sarprasTargetPoints) * 50).toFixed(1)) : 0;
   const totalRsbkScore = Number((sdmSubScore + sarprasSubScore).toFixed(1));
 
-  const handleSaveDraft = () => {
+  // --- QoL 1: Auto-Save State Interceptors ---
+  const stateRef = useRef({ formData, totalRsbkScore, filledItems, totalItems });
+  const isNavigatingAwayRef = useRef(false); // Prevents double-saving when using explicit buttons
+
+  useEffect(() => {
+    stateRef.current = { formData, totalRsbkScore, filledItems, totalItems };
+  }, [formData, totalRsbkScore, filledItems, totalItems]);
+
+  useEffect(() => {
+    return () => {
+      // If the component is unmounting (user switched pages) and didn't use a dedicated button
+      if (isNavigatingAwayRef.current) return; 
+      
+      const draftId = draftManager.getCurrentDraftId();
+      if (draftId && specialty) {
+        const current = stateRef.current;
+        if (Object.keys(current.formData).length > 0) {
+          draftManager.updateDraft(draftId, specialty, "rsbk", {
+            data: current.formData,
+            score: current.totalRsbkScore,
+            completed: current.filledItems === current.totalItems,
+          });
+        }
+      }
+    };
+  }, [specialty]);
+
+  // --- Adjusted Button Handlers ---
+  const handleSaveDraft = (showToast = true) => {
     const draftId = draftManager.getCurrentDraftId();
     if (!draftId || !specialty) return;
     draftManager.updateDraft(draftId, specialty, "rsbk", {
@@ -99,35 +128,45 @@ export function RsbkFormPage() {
       score: totalRsbkScore,
       completed: filledItems === totalItems,
     });
-    alert("Draft berhasil disimpan!");
+    if (showToast) {
+      toast.success("Draft Tersimpan", { description: "Progress Hospital Structure berhasil diamankan." });
+    }
   };
 
   const handleSubmit = () => {
+    isNavigatingAwayRef.current = true; // Stop the unmount auto-save from interfering
+    
     const draftId = draftManager.getCurrentDraftId();
-    if (!draftId || !specialty) return;
-    draftManager.updateDraft(draftId, specialty, "rsbk", {
-      data: formData,
-      score: totalRsbkScore,
-      completed: true,
-    });
+    if (draftId && specialty) {
+      // Forcefully update the draft as completed, ignoring the filledItems check
+      draftManager.updateDraft(draftId, specialty, "rsbk", {
+        data: formData,
+        score: totalRsbkScore,
+        completed: true, 
+      });
+    }
+
     sessionStorage.setItem(`${specialty}_rsbkScore`, totalRsbkScore.toString());
     sessionStorage.setItem("currentSpecialty", specialty || "");
     navigate(`/siap-persi/clinical-audit/${specialty}`);
   };
 
   const handleIsiNanti = () => {
+    isNavigatingAwayRef.current = true;
     const draftId = draftManager.getCurrentDraftId();
     if (!draftId || !specialty) return;
-
-    // Save current progress, but strictly tell the system it is NOT done
     draftManager.updateDraft(draftId, specialty, "rsbk", {
       data: formData,
       score: totalRsbkScore,
-      completed: false, // <--- This guarantees no checkmark!
+      completed: false, // Guarantees no checkmark
     });
-
-    // Now teleport them to the next page
     navigate(`/siap-persi/clinical-audit/${specialty}`);
+  };
+
+  const handleBackToPortal = () => {
+    isNavigatingAwayRef.current = true; // Stop the unmount double-save
+    handleSaveDraft(false); // Silent save
+    navigate("/hospital-login"); // Change this if your portal URL is different
   };
 
   return (
@@ -137,9 +176,14 @@ export function RsbkFormPage() {
 
         {/* Header */}
         <div className="mb-6">
-          <Link to="/siap-persi/select-specialty" className="inline-flex items-center text-[#0F4C81] hover:underline mb-4">
-            &larr; Kembali ke Pilih Pelayanan
-          </Link>
+          <Button 
+            variant="ghost" 
+            onClick={handleBackToPortal} 
+            className="text-[#0F4C81] hover:text-[#0d3d66] hover:bg-blue-50 px-3 h-9 mb-4 -ml-3 transition-colors"
+          >
+            <ArrowLeft className="w-4 h-4 mr-2" />
+            Kembali ke Portal RS
+          </Button>
           <div className="flex items-center justify-between">
             <div>
               <h1 className="text-4xl font-bold text-gray-900 mb-2">Hospital Structure Form - {specialtyInfo.name}</h1>

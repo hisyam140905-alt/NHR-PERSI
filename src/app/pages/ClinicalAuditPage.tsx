@@ -1,10 +1,11 @@
-import { useState, useEffect } from "react";
-import { useParams, Link, useNavigate } from "react-router";
-import { ChevronRight, Save, AlertCircle, ChevronLeft, CheckCircle2 } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { useParams, useNavigate } from "react-router";
+import { ChevronRight, Save, AlertCircle, ChevronLeft, ArrowLeft } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { specialtyAuditData } from "../data/specialtyAuditData";
 import { SpecialtyProgressTracker } from "../components/SpecialtyProgressTracker";
 import { draftManager } from "../utils/draftManager";
+import { toast } from "sonner";
 
 // Audit compliance options
 const AUDIT_OPTIONS = [
@@ -44,7 +45,6 @@ export function ClinicalAuditPage() {
 
   const [formData, setFormData] = useState<Record<string, string>>({});
   const [currentPatient, setCurrentPatient] = useState(1);
-  const [draftSavedMsg, setDraftSavedMsg] = useState(false);
 
 
   // Load draft on mount - Robust Sync with Draft Manager
@@ -136,38 +136,89 @@ export function ClinicalAuditPage() {
     return count;
   };
 
-  const handleNextPatient = () => {
-    if (currentPatient < 30) setCurrentPatient(currentPatient + 1);
-  };
+  // --- QoL 1: Auto-Save State Interceptors ---
+  const stateRef = useRef({ formData, currentPatient, activeDiseaseIndex, currentQuestions });
+  const isNavigatingAwayRef = useRef(false);
 
-  const handlePrevPatient = () => {
-    if (currentPatient > 1) setCurrentPatient(currentPatient - 1);
-  };
+  useEffect(() => {
+    stateRef.current = { formData, currentPatient, activeDiseaseIndex, currentQuestions };
+  }, [formData, currentPatient, activeDiseaseIndex, currentQuestions]);
 
-  const handleSaveDraft = () => {
+  // Auto-Save on Component Unmount (Swapping stages/specialties)
+  useEffect(() => {
+    return () => {
+      if (isNavigatingAwayRef.current) return;
+
+      const draftId = draftManager.getCurrentDraftId();
+      if (draftId && specialty) {
+        const { formData: currentFormData, currentPatient: cp, activeDiseaseIndex: adi, currentQuestions: cq } = stateRef.current;
+        if (Object.keys(currentFormData).length > 0) {
+          
+          // Re-calculate pure score based purely on captured unmount data
+          let totalScore = 0;
+          let completedPatients = 0;
+          for (let i = 1; i <= 30; i++) {
+             let total = 0;
+             let count = 0;
+             cq.forEach((q) => {
+               const key = `${i}-${q.id}`;
+               if (currentFormData[key]) { count++; total += getOptionScore(currentFormData[key]); }
+             });
+             const patientScore = count === cq.length ? Math.round((total / count) * 100) : null;
+             if (patientScore !== null) { totalScore += patientScore; completedPatients++; }
+          }
+          const finalScore = completedPatients === 0 ? 0 : Math.round(Math.round(totalScore / completedPatients) * getSampleValidityWeight(completedPatients));
+
+          draftManager.updateDraft(draftId, specialty, "clinicalAudit", {
+             data: currentFormData,
+             currentPatient: cp,
+             activeDiseaseIndex: adi,
+             score: finalScore,
+             completed: false
+          } as any);
+        }
+      }
+    };
+  }, [specialty]);
+
+  // --- Adjusted Button Handlers ---
+  const handleSaveDraft = (showToast = true) => {
     if (!specialty) return;
-    
-    // 1. Calculate the score BEFORE saving
     const currentScore = calculateOverallScore(); 
 
     const draftId = draftManager.getCurrentDraftId();
     if (draftId) {
-      // 2. Save directly to the single source of truth, including the disease index!
       draftManager.updateDraft(draftId, specialty, "clinicalAudit", {
         data: formData,
         currentPatient,
         score: currentScore,
-        activeDiseaseIndex, // <--- CRITICAL: Save the active tab!
+        activeDiseaseIndex, 
         completed: false, 
-      } as any); // Cast to any to accept the extra property
+      } as any); 
     }
     
-    setDraftSavedMsg(true);
-    setTimeout(() => setDraftSavedMsg(false), 3000);
+    if (showToast) {
+      toast.success("Draft Tersimpan", { description: "Progress Audit Klinis berhasil diamankan." });
+    }
+  };
+
+  const handleNextPatient = () => {
+    if (currentPatient < 30) {
+      handleSaveDraft(false); // QoL: Auto-save silently on patient flip
+      setCurrentPatient(currentPatient + 1);
+    }
+  };
+
+  const handlePrevPatient = () => {
+    if (currentPatient > 1) {
+      handleSaveDraft(false); // QoL: Auto-save silently on patient flip
+      setCurrentPatient(currentPatient - 1);
+    }
   };
 
   const handleSubmit = () => {
-    handleSaveDraft(); // Ensure current state is saved first
+    isNavigatingAwayRef.current = true;
+    handleSaveDraft(false); 
     const score = calculateOverallScore();
 
     const draftId = draftManager.getCurrentDraftId();
@@ -180,24 +231,20 @@ export function ClinicalAuditPage() {
          completed: true,
       } as any);
     }
-
     sessionStorage.setItem(`${specialty}_clinicalAuditScore`, score.toString());
     navigate(`/siap-persi/patient-report/${specialty}`);
   };
 
   const handleIsiNanti = () => {
-    handleSaveDraft(); // Ensure current state is saved first
-    const draftId = draftManager.getCurrentDraftId();
-    
-    if (draftId && specialty) {
-      draftManager.updateDraft(draftId, specialty, "clinicalAudit", {
-        data: formData,
-        currentPatient,
-        activeDiseaseIndex,
-        completed: false,
-      } as any);
-    }
+    isNavigatingAwayRef.current = true;
+    handleSaveDraft(false); 
     navigate(`/siap-persi/patient-report/${specialty}`);
+  };
+
+  const handleBackToPortal = () => {
+    isNavigatingAwayRef.current = true;
+    handleSaveDraft(false); // Silent save
+    navigate("/hospital-login"); 
   };
 
   const currentPatientData = getCurrentPatientData();
@@ -252,22 +299,16 @@ export function ClinicalAuditPage() {
         {/* Multi-Specialty Progress */}
         <SpecialtyProgressTracker currentSpecialty={specialty || ""} currentStage="clinical-audit" />
 
-        {/* Draft Saved Toast */}
-        {draftSavedMsg && (
-          <div className="fixed top-6 right-6 z-50 bg-green-600 text-white px-6 py-3 rounded-xl shadow-lg flex items-center gap-2 animate-in slide-in-from-right">
-            <CheckCircle2 className="w-5 h-5" />
-            <span className="font-semibold">Draft berhasil disimpan!</span>
-          </div>
-        )}
-
         {/* Header */}
         <div className="mb-6">
-          <Link
-            to={`/siap-persi/rsbk/${specialty}`}
-            className="inline-flex items-center text-[#0F4C81] hover:underline mb-4"
+          <Button 
+            variant="ghost" 
+            onClick={handleBackToPortal} 
+            className="text-[#0F4C81] hover:text-[#0d3d66] hover:bg-blue-50 px-3 h-9 mb-4 -ml-3 transition-colors"
           >
-            ← Kembali ke Hospital Structure Form
-          </Link>
+            <ArrowLeft className="w-4 h-4 mr-2" />
+            Kembali ke Portal RS
+          </Button>
           <div className="flex items-center justify-between">
             <div>
               <h1 className="text-4xl font-bold text-gray-900 mb-2">
@@ -394,7 +435,10 @@ export function ClinicalAuditPage() {
               return (
                 <button
                   key={num}
-                  onClick={() => setCurrentPatient(num)}
+                  onClick={() => {
+                    handleSaveDraft(false); // QoL: Auto save silently when using quick grid
+                    setCurrentPatient(num);
+                  }}
                   className={`w-10 h-10 rounded-lg font-semibold transition-all ${isCurrent
                     ? "bg-[#0F4C81] text-white ring-2 ring-[#0F4C81] ring-offset-2"
                     : isCompleted
@@ -517,7 +561,7 @@ export function ClinicalAuditPage() {
         {/* Action Buttons */}
         <div className="flex gap-4 mt-8">
           <Button
-            onClick={handleSaveDraft}
+            onClick={() => handleSaveDraft()}
             variant="outline"
             className="h-12 px-8 border-2 border-gray-300 font-semibold"
           >

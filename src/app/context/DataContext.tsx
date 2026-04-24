@@ -5,7 +5,7 @@ import {
   getAllRankingsFromDb,
   API_BASE_URL
 } from "../utils/api";
-
+import { toast } from "sonner";
 
 
 // Helper function to generate headers with the Authorization token
@@ -543,16 +543,15 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
       if (rankingResponse.ok) {
         setSubmissions(prev => prev.map(s => s.id === submission.id ? { ...s, status: "Approved" } : s));
-        alert("Submission approved and published to rankings!");
-        // Refresh your admin lists here if necessary
+        toast.success("Submission Disetujui", { description: "Data rumah sakit telah dipublikasikan ke Rankings!" });
         return true;
       } else {
-        alert("Approved, but failed to publish to rankings.");
+        toast.error("Gagal Mempublikasikan", { description: "Submission disetujui, tetapi gagal masuk ke Rankings." });
         return false;
       }
     } catch (err) {
       console.error("Error approving submission:", err);
-      alert("Terjadi kesalahan saat menyetujui data.");
+      toast.error("Terjadi Kesalahan", { description: "Sistem gagal menyetujui data." });
       return false;
     }
   }, []);
@@ -572,7 +571,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
       if (response.ok) {
         setSubmissions(prev => prev.map(s => s.id === submissionId ? { ...s, status: "Revision Required" } : s));
-        alert("Submission rejected.");
+        toast.info("Submission Dikembalikan", { description: "Status diubah menjadi Revision Required." });
         return true;
       }
       return false;
