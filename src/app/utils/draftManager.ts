@@ -42,17 +42,17 @@ const getActiveHospitalCode = (): string => {
   try {
     const currentHospital = JSON.parse(sessionStr);
     const realName = currentHospital.hospitalName || currentHospital.hospital_name || "Unknown";
-    
+
     // 1. Extract up to the first 2 words and format with hyphen
     const nameParts = realName.replace(/[^a-zA-Z0-9\s]/g, '').trim().split(/\s+/);
     const shortName = nameParts.slice(0, 2).join('-').toUpperCase() || "HOS";
-    
+
     // 2. Strip out the annoying "hosp-" string from the database ID
     const cleanId = currentHospital.id ? String(currentHospital.id).replace('hosp-', '') : '';
 
     // 3. Combine into the clean format
-    return cleanId 
-      ? `${shortName}-${cleanId}` 
+    return cleanId
+      ? `${shortName}-${cleanId}`
       : currentHospital.email
         ? `${shortName}-${currentHospital.email.split("@")[0].replace(/[^a-zA-Z0-9]/g, "").toUpperCase()}`
         : `${shortName}-001`;
@@ -201,13 +201,13 @@ export const draftManager = {
 
     // Fire BOTH the unique ID and the master key. 
     // This guarantees the backend will delete it regardless of which query version is live!
-    deleteCloudDraft(draftId).catch(() => {}); 
-    deleteCloudDraft(cloudDraftKey).catch(() => {});
+    deleteCloudDraft(draftId).catch(() => { });
+    deleteCloudDraft(cloudDraftKey).catch(() => { });
 
     // 4. Cloud Slot Overwrite: The cloud only has 1 slot per hospital.
     // If you have other local drafts remaining, we upload the most recent one to overwrite the deleted one.
     if (filtered.length > 0) {
-      saveHospitalDraft(hCode, "all", filtered[filtered.length - 1] as any).catch(() => {});
+      saveHospitalDraft(hCode, "all", filtered[filtered.length - 1] as any).catch(() => { });
     }
   },
 
@@ -243,19 +243,19 @@ export const draftManager = {
         const specialtyInfo = specialtyAuditData[specialty as keyof typeof specialtyAuditData];
         const rsbkItems = specialtyInfo ? specialtyInfo.rsbkItems : [];
         const totalRsbkItems = rsbkItems.length;
-        
+
         const rsbkData = progress.rsbk.data || {};
-        
+
         // Count how many required items actually have a valid value in the draft
-        const filledRsbkItems = rsbkItems.filter(item => 
-          rsbkData[item.id] !== null && 
-          rsbkData[item.id] !== undefined && 
+        const filledRsbkItems = rsbkItems.filter(item =>
+          rsbkData[item.id] !== null &&
+          rsbkData[item.id] !== undefined &&
           rsbkData[item.id] !== ""
         ).length;
 
         const rsbkProgress = totalRsbkItems > 0 ? Math.round((filledRsbkItems / totalRsbkItems) * 100) : 0;
         const rsbkCompleted = rsbkProgress === 100 || progress.rsbk.completed;
-        
+
         if (rsbkCompleted) completedStages++;
         overallPercentage += rsbkProgress;
 
@@ -267,35 +267,116 @@ export const draftManager = {
         };
 
         // ==========================================
-        // 2. Clinical Audit Logic: 1 patient = 100%
+        // 2. Clinical Audit Logic (Proportional & Multi-Disease)
         // ==========================================
-        const caPatientCount = progress.clinicalAudit.currentPatient || 0;
-        const caCompleted = caPatientCount > 0 || progress.clinicalAudit.completed;
-        
+        const diseases = specialtyInfo?.diseases || [];
+        const caData = progress.clinicalAudit.data || {};
+
+        // Build a questionId → diseaseIndex lookup map so we can correctly
+        // parse keys like "1-card-st-1" where the questionId itself contains hyphens.
+        const questionToDiseaseMap = new Map<string, number>();
+        diseases.forEach((d, idx) => {
+          d.questions.forEach(q => {
+            questionToDiseaseMap.set(q.id, idx);
+          });
+        });
+
+        // Count unique patients per disease based on formData keys
+        const caPatientsPerDisease = diseases.map(() => new Set<string>());
+        Object.keys(caData).forEach(key => {
+          // Key format from ClinicalAuditPage: "{patientNumber}-{questionId}"
+          // questionId may contain hyphens (e.g., "card-st-1"), so we split only on the FIRST dash.
+          const firstDash = key.indexOf('-');
+          if (firstDash === -1) return;
+
+          const patientNum = key.substring(0, firstDash);
+          const questionId = key.substring(firstDash + 1);
+
+          const dIndex = questionToDiseaseMap.get(questionId);
+          if (dIndex !== undefined && caPatientsPerDisease[dIndex]) {
+            caPatientsPerDisease[dIndex].add(patientNum);
+          }
+        });
+
+        let totalCaPatients = 0;
+        const caDiseaseBreakdowns = diseases.map((d, idx) => {
+          const count = caPatientsPerDisease[idx]?.size || 0;
+          totalCaPatients += count;
+          return {
+            name: d.diseaseName,
+            patientCount: count,
+            weight: getVolumeWeight(count)
+          };
+        });
+
+        // Calculate proportional progress (Target: 30 patients per disease)
+        const targetCaPatients = diseases.length * 30;
+        const caProgress = targetCaPatients > 0 ? Math.min(100, Math.round((totalCaPatients / targetCaPatients) * 100)) : 0;
+        const caCompleted = progress.clinicalAudit.completed || caProgress === 100;
+
         if (caCompleted) completedStages++;
-        overallPercentage += caCompleted ? 100 : 0;
+        overallPercentage += caProgress; // Proportional progress added
 
         details[specialty].clinicalAudit = {
-          progress: caCompleted ? 100 : 0,
-          patientCount: caPatientCount,
-          weight: getVolumeWeight(caPatientCount),
-          completed: caCompleted
+          progress: caProgress,
+          patientCount: totalCaPatients,
+          weight: getVolumeWeight(totalCaPatients),
+          completed: caCompleted,
+          diseaseBreakdowns: caDiseaseBreakdowns // <--- Injected for the UI
         };
 
         // ==========================================
-        // 3. Patient Report (PREM/PROM) Logic: 1 patient = 100%
+        // 3. Patient Report (PREM/PROM) Logic (Proportional & Multi-Disease)
         // ==========================================
-        const prPatientCount = progress.patientReport.patientCount || 0;
-        const prCompleted = prPatientCount > 0 || progress.patientReport.completed;
-        
+        const prData = progress.patientReport.data || {};
+        const prDiseaseScores = (progress.patientReport as any).diseaseScores || {};
+        let totalPrPatients = 0;
+
+        const prDiseaseBreakdowns = diseases.map((d, idx) => {
+          // Primary source: diseaseScores (written by PatientReportPage)
+          const key = `${specialty}-d${idx}`;
+          const scoreData = prDiseaseScores[key];
+          let count = 0;
+
+          if (scoreData && typeof scoreData.patientCount === 'number') {
+            count = scoreData.patientCount;
+          } else {
+            // Fallback: check the nested data structure
+            const dData = prData[idx as any] || prData[key] || prData[`disease_${idx}`];
+
+            if (dData && typeof (dData as any).patientCount === 'number') {
+              count = (dData as any).patientCount;
+            } else if (diseases.length === 1) {
+              // Fallback for legacy single-disease
+              count = progress.patientReport.patientCount || 0;
+            }
+          }
+
+          totalPrPatients += count;
+
+          // Use nativePatientCount for weight if available (excludes PDF uploads)
+          const nativeCount = scoreData?.nativePatientCount ?? count;
+          return {
+            name: d.diseaseName,
+            patientCount: count,
+            weight: getVolumeWeight(nativeCount)
+          };
+        });
+
+        // Calculate proportional progress (Target: 30 patients per disease)
+        const targetPrPatients = diseases.length * 30;
+        const prProgress = targetPrPatients > 0 ? Math.min(100, Math.round((totalPrPatients / targetPrPatients) * 100)) : 0;
+        const prCompleted = progress.patientReport.completed || prProgress === 100;
+
         if (prCompleted) completedStages++;
-        overallPercentage += prCompleted ? 100 : 0;
+        overallPercentage += prProgress; // Proportional progress added
 
         details[specialty].patientReport = {
-          progress: prCompleted ? 100 : 0,
-          patientCount: prPatientCount,
-          weight: getVolumeWeight(prPatientCount),
-          completed: prCompleted
+          progress: prProgress,
+          patientCount: totalPrPatients,
+          weight: getVolumeWeight(totalPrPatients),
+          completed: prCompleted,
+          diseaseBreakdowns: prDiseaseBreakdowns // <--- Injected for the UI
         };
       }
     });
@@ -304,7 +385,7 @@ export const draftManager = {
       totalStages,
       completedStages,
       percentage: totalStages > 0 ? Math.round(overallPercentage / totalStages) : 0,
-      details 
+      details
     };
   },
 

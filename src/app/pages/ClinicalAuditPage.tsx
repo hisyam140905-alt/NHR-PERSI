@@ -52,16 +52,16 @@ export function ClinicalAuditPage() {
     const draftId = draftManager.getCurrentDraftId();
     if (draftId && specialty) {
       const draft = draftManager.getDraftById(draftId);
-      
+
       // Ensure the clinicalAudit object exists
       if (draft && draft.progress[specialty] && draft.progress[specialty].clinicalAudit) {
         const caData = draft.progress[specialty].clinicalAudit;
-        
+
         // 1. Restore formData
         if (caData.data && Object.keys(caData.data).length > 0) {
           setFormData(caData.data as Record<string, string>);
         }
-        
+
         // 2. Restore current patient
         if (caData.currentPatient) {
           setCurrentPatient(caData.currentPatient);
@@ -70,7 +70,7 @@ export function ClinicalAuditPage() {
         // 3. Restore the active disease tab (This was the missing link!)
         // Note: We have to cast to any here because we added activeDiseaseIndex to the payload later
         if ((caData as any).activeDiseaseIndex !== undefined) {
-            setActiveDiseaseIndex((caData as any).activeDiseaseIndex);
+          setActiveDiseaseIndex((caData as any).activeDiseaseIndex);
         }
       }
     }
@@ -93,45 +93,82 @@ export function ClinicalAuditPage() {
   // Get all questions for current disease
   const currentQuestions = activeDisease.questions;
 
-  const calculatePatientScore = (patientNum: number) => {
-    let total = 0;
-    let count = 0;
+  const calculatePatientScore = (patientNum: number, diseaseIndex = activeDiseaseIndex) => {
+    let isComplete = true;
+    const categories: Record<string, { total: number; count: number; weight: number }> = {};
+    const questions = diseases[diseaseIndex].questions;
 
-    currentQuestions.forEach((q) => {
+    questions.forEach((q) => {
       const key = `${patientNum}-${q.id}`;
-      if (formData[key]) {
-        count++;
-        total += getOptionScore(formData[key]);
+
+      // If any question is missing, the patient is not complete
+      if (!formData[key]) {
+        isComplete = false;
+      } else {
+        // Extract the weight dynamically from the category string (e.g., "Diagnosis (25%)")
+        const weightMatch = q.category.match(/(\d+)%/);
+        const weight = weightMatch ? parseInt(weightMatch[1]) / 100 : 0.25;
+        const catName = q.category.replace(/\s*\(\d+%\)/, "");
+
+        if (!categories[catName]) {
+          categories[catName] = { total: 0, count: 0, weight };
+        }
+
+        categories[catName].total += getOptionScore(formData[key]);
+        categories[catName].count++;
       }
     });
 
-    return count === currentQuestions.length
-      ? Math.round((total / count) * 100)
-      : null;
+    if (!isComplete) return null;
+
+    let finalWeightedScore = 0;
+
+    // Calculate the weighted score: (CatScore * Weight) + (CatScore * Weight)...
+    Object.values(categories).forEach((cat) => {
+      if (cat.count > 0) {
+        const catScore = (cat.total / cat.count) * 100;
+        finalWeightedScore += catScore * cat.weight;
+      }
+    });
+
+    return Math.round(finalWeightedScore);
   };
 
-  const calculateOverallScore = () => {
+  const calculateDiseaseScore = (diseaseIndex: number) => {
     let totalScore = 0;
     let completedPatients = 0;
 
     for (let i = 1; i <= 30; i++) {
-      const score = calculatePatientScore(i);
+      const score = calculatePatientScore(i, diseaseIndex);
       if (score !== null) {
         totalScore += score;
         completedPatients++;
       }
     }
 
-    if (completedPatients === 0) return 0;
+    if (completedPatients === 0) return null;
     const rawScore = Math.round(totalScore / completedPatients);
     const validityWeight = getSampleValidityWeight(completedPatients);
     return Math.round(rawScore * validityWeight);
   };
 
+  const calculateOverallScore = () => {
+    let finalOverallScore = 0;
+    let inputtedDiseasesCount = 0;
+    diseases.forEach((_d, index) => {
+      const dScore = calculateDiseaseScore(index);
+      if (dScore !== null) {
+        finalOverallScore += dScore;
+        inputtedDiseasesCount++;
+      }
+    });
+    return inputtedDiseasesCount > 0 ? Math.round(finalOverallScore / inputtedDiseasesCount) : 0;
+  };
+
   const getCompletedPatientsCount = () => {
     let count = 0;
     for (let i = 1; i <= 30; i++) {
-      if (calculatePatientScore(i) !== null) count++;
+      if (calculatePatientScore(i, activeDiseaseIndex) !== null) count++;
     }
     return count;
   };
@@ -151,30 +188,61 @@ export function ClinicalAuditPage() {
 
       const draftId = draftManager.getCurrentDraftId();
       if (draftId && specialty) {
-        const { formData: currentFormData, currentPatient: cp, activeDiseaseIndex: adi, currentQuestions: cq } = stateRef.current;
+        const { formData: currentFormData, currentPatient: cp, activeDiseaseIndex: adi } = stateRef.current;
         if (Object.keys(currentFormData).length > 0) {
-          
+
           // Re-calculate pure score based purely on captured unmount data
-          let totalScore = 0;
-          let completedPatients = 0;
-          for (let i = 1; i <= 30; i++) {
-             let total = 0;
-             let count = 0;
-             cq.forEach((q) => {
-               const key = `${i}-${q.id}`;
-               if (currentFormData[key]) { count++; total += getOptionScore(currentFormData[key]); }
-             });
-             const patientScore = count === cq.length ? Math.round((total / count) * 100) : null;
-             if (patientScore !== null) { totalScore += patientScore; completedPatients++; }
-          }
-          const finalScore = completedPatients === 0 ? 0 : Math.round(Math.round(totalScore / completedPatients) * getSampleValidityWeight(completedPatients));
+          let finalOverallScore = 0;
+          let inputtedDiseasesCount = 0;
+          diseases.forEach((d) => {
+            let totalScore = 0;
+            let completedPatients = 0;
+
+            for (let i = 1; i <= 30; i++) {
+              let isComplete = true;
+              const categories: Record<string, { total: number; count: number; weight: number }> = {};
+
+              d.questions.forEach((q) => {
+                const key = `${i}-${q.id}`;
+                if (!currentFormData[key]) {
+                  isComplete = false;
+                } else {
+                  const weightMatch = q.category.match(/(\d+)%/);
+                  const catWeight = weightMatch ? parseInt(weightMatch[1]) / 100 : 0.25;
+                  const catName = q.category.replace(/\s*\(\d+%\)/, "");
+
+                  if (!categories[catName]) categories[catName] = { total: 0, count: 0, weight: catWeight };
+                  categories[catName].total += getOptionScore(currentFormData[key]);
+                  categories[catName].count++;
+                }
+              });
+
+              if (isComplete) {
+                let finalWeightedScore = 0;
+                Object.values(categories).forEach((cat) => {
+                  if (cat.count > 0) {
+                    finalWeightedScore += (cat.total / cat.count) * 100 * cat.weight;
+                  }
+                });
+                totalScore += Math.round(finalWeightedScore);
+                completedPatients++;
+              }
+            }
+
+            if (completedPatients > 0) {
+              const dScore = Math.round(Math.round(totalScore / completedPatients) * getSampleValidityWeight(completedPatients));
+              finalOverallScore += dScore;
+              inputtedDiseasesCount++;
+            }
+          });
+          const finalScore = inputtedDiseasesCount > 0 ? Math.round(finalOverallScore / inputtedDiseasesCount) : 0;
 
           draftManager.updateDraft(draftId, specialty, "clinicalAudit", {
-             data: currentFormData,
-             currentPatient: cp,
-             activeDiseaseIndex: adi,
-             score: finalScore,
-             completed: false
+            data: currentFormData,
+            currentPatient: cp,
+            activeDiseaseIndex: adi,
+            score: finalScore,
+            completed: false
           } as any);
         }
       }
@@ -184,7 +252,7 @@ export function ClinicalAuditPage() {
   // --- Adjusted Button Handlers ---
   const handleSaveDraft = (showToast = true) => {
     if (!specialty) return;
-    const currentScore = calculateOverallScore(); 
+    const currentScore = calculateOverallScore();
 
     const draftId = draftManager.getCurrentDraftId();
     if (draftId) {
@@ -192,11 +260,11 @@ export function ClinicalAuditPage() {
         data: formData,
         currentPatient,
         score: currentScore,
-        activeDiseaseIndex, 
-        completed: false, 
-      } as any); 
+        activeDiseaseIndex,
+        completed: false,
+      } as any);
     }
-    
+
     if (showToast) {
       toast.success("Draft Tersimpan", { description: "Progress Audit Klinis berhasil diamankan." });
     }
@@ -218,17 +286,17 @@ export function ClinicalAuditPage() {
 
   const handleSubmit = () => {
     isNavigatingAwayRef.current = true;
-    handleSaveDraft(false); 
+    handleSaveDraft(false);
     const score = calculateOverallScore();
 
     const draftId = draftManager.getCurrentDraftId();
     if (draftId && specialty) {
       draftManager.updateDraft(draftId, specialty, "clinicalAudit", {
-         data: formData,
-         currentPatient,
-         activeDiseaseIndex,
-         score: score,
-         completed: true,
+        data: formData,
+        currentPatient,
+        activeDiseaseIndex,
+        score: score,
+        completed: true,
       } as any);
     }
     sessionStorage.setItem(`${specialty}_clinicalAuditScore`, score.toString());
@@ -237,14 +305,14 @@ export function ClinicalAuditPage() {
 
   const handleIsiNanti = () => {
     isNavigatingAwayRef.current = true;
-    handleSaveDraft(false); 
+    handleSaveDraft(false);
     navigate(`/siap-persi/patient-report/${specialty}`);
   };
 
   const handleBackToPortal = () => {
     isNavigatingAwayRef.current = true;
     handleSaveDraft(false); // Silent save
-    navigate("/hospital-login"); 
+    navigate("/siap-persi/select-specialty");
   };
 
   const currentPatientData = getCurrentPatientData();
@@ -301,9 +369,9 @@ export function ClinicalAuditPage() {
 
         {/* Header */}
         <div className="mb-6">
-          <Button 
-            variant="ghost" 
-            onClick={handleBackToPortal} 
+          <Button
+            variant="ghost"
+            onClick={handleBackToPortal}
             className="text-[#0F4C81] hover:text-[#0d3d66] hover:bg-blue-50 px-3 h-9 mb-4 -ml-3 transition-colors"
           >
             <ArrowLeft className="w-4 h-4 mr-2" />
@@ -352,10 +420,10 @@ export function ClinicalAuditPage() {
         <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
           <div className="flex items-center justify-between mb-3">
             <span className="text-sm font-semibold text-gray-700">
-              Progress Review Pasien — {activeDisease.diseaseName}
+              Jumlah Rekam Medis Terisi — {activeDisease.diseaseName}
             </span>
             <span className="text-sm text-gray-600">
-              {completedPatients} / 30 rekam medis ({progress.toFixed(0)}%)
+              {completedPatients} / 30 Rekam medis
             </span>
           </div>
           <div className="w-full bg-gray-200 rounded-full h-3 mb-4">
@@ -400,7 +468,8 @@ export function ClinicalAuditPage() {
               Sebelumnya
             </Button>
 
-            <div className="flex items-center gap-4">
+            {/* Centered vertically stacked patient info */}
+            <div className="flex flex-col items-center justify-center gap-1">
               <span className="text-lg font-bold text-gray-900">
                 Pasien #{currentPatient}
               </span>
@@ -544,8 +613,28 @@ export function ClinicalAuditPage() {
                 )}
               </tbody>
               <tfoot>
+                {/* 1. Subtotal Skor Raw */}
+                <tr className="border-t-2 border-gray-200 bg-gray-50/50">
+                  <td className="py-3 px-4 font-semibold text-gray-700" colSpan={3}>Subtotal (Skor Raw)</td>
+                  <td className="py-3 px-4 text-center font-semibold text-gray-700">{rawWeightedAudit}</td>
+                </tr>
+
+                {/* 2. Bobot Validitas (Jumlah Pasien) */}
+                <tr className="border-b border-gray-200 bg-amber-50/50">
+                  <td className="py-3 px-4 font-medium text-amber-800" colSpan={2}>
+                    Bobot Validitas Sampel ({completedPatients} RM Selesai)
+                  </td>
+                  <td className="py-3 px-4 text-center font-bold text-amber-800">
+                    x {(validityWeight * 100).toFixed(0)}%
+                  </td>
+                  <td className="py-3 px-4 text-center text-amber-800/50">
+                    -
+                  </td>
+                </tr>
+
+                {/* 3. Final Total */}
                 <tr className="bg-[#0F4C81]/10">
-                  <td className="py-3 px-4 font-bold text-[#0F4C81] text-lg" colSpan={3}>Total Audit Klinis</td>
+                  <td className="py-3 px-4 font-bold text-[#0F4C81] text-lg" colSpan={3}>Skor Akhir Audit Klinis</td>
                   <td className="py-3 px-4 text-center font-bold text-[#0F4C81] text-2xl">{totalWeightedAudit}</td>
                 </tr>
               </tfoot>

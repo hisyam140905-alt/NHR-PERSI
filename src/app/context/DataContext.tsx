@@ -3,6 +3,9 @@ import { createContext, useContext, useState, useEffect, ReactNode, useCallback 
 import {
   getAllSubmissions,
   getAllRankingsFromDb,
+  softDeleteSubmission as apiSoftDelete,
+  restoreSubmission as apiRestore,
+  getDeletedSubmissions as apiGetDeleted,
   API_BASE_URL
 } from "../utils/api";
 import { toast } from "sonner";
@@ -108,8 +111,14 @@ interface DataContextType {
   submissions: SubmissionData[];
   addSubmission: (submission: Omit<SubmissionData, "id">) => void;
   updateSubmissionStatus: (id: string, status: SubmissionData["status"], notes?: string) => void;
-  approveSubmission: (submission: any) => Promise<boolean>;
-  rejectSubmission: (submissionId: string) => Promise<boolean>;
+  approveSubmission: (submission: any, comment?: string) => Promise<boolean>;
+  rejectSubmission: (submissionId: string, comment?: string) => Promise<boolean>;
+
+  // Submission lifecycle
+  deletedSubmissions: SubmissionData[];
+  softDeleteSubmission: (id: string) => Promise<boolean>;
+  restoreSubmission: (id: string) => Promise<boolean>;
+  fetchDeletedSubmissions: () => Promise<void>;
 }
 
 const DataContext = createContext<DataContextType | null>(null);
@@ -137,6 +146,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
   const [approvedRankings, setApprovedRankings] = useState<ApprovedRanking[]>(() => loadFromStorage("persi_rankings", []));
   const [submissions, setSubmissions] = useState<SubmissionData[]>(() => loadFromStorage("persi_submissions", []));
+  const [deletedSubmissions, setDeletedSubmissions] = useState<SubmissionData[]>([]);
 
   useEffect(() => {
     async function syncSubmissions() {
@@ -492,7 +502,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
   const updateSubmissionStatus = useCallback(async (_id: string, _status: SubmissionData["status"], _notes?: string) => { /*...*/ }, [unpublishRanking]);
 
-  const approveSubmission = useCallback(async (submission: any) => {
+  const approveSubmission = useCallback(async (submission: any, comment?: string) => {
     try {
       const token = sessionStorage.getItem("auth_token") || localStorage.getItem("hospitalToken") || localStorage.getItem("token");
 
@@ -503,7 +513,13 @@ export function DataProvider({ children }: { children: ReactNode }) {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${token}`
         },
-        body: JSON.stringify({ status: "approved" })
+        body: JSON.stringify({
+          status: "approved",
+          prmScore: Number(submission.scores?.prm || submission.prmScore || 0),
+          prmRawScore: Number(submission.scores?.patientReportRaw || submission.scores?.prmRaw || submission.prmRawScore || 0),
+          finalScore: Number(submission.scores?.final || submission.finalScore || 0),
+          adminNotes: comment
+        })
       });
 
       if (!statusResponse.ok) throw new Error("Failed to update status");
@@ -528,6 +544,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         rsbkScore: Number(submission.scores?.rsbk || submission.rsbkScore || 0),
         clinicalAuditScore: Number(submission.scores?.audit || submission.auditScore || 0),
         patientReportScore: Number(submission.scores?.prm || submission.prmScore || 0),
+        patientReportRawScore: Number(submission.scores?.patientReportRaw || submission.scores?.prmRaw || submission.prmRawScore || 0),
         grade: calculatedGrade,
         approvedAt: new Date().toISOString()
       };
@@ -542,7 +559,20 @@ export function DataProvider({ children }: { children: ReactNode }) {
       });
 
       if (rankingResponse.ok) {
-        setSubmissions(prev => prev.map(s => s.id === submission.id ? { ...s, status: "Approved" } : s));
+        setSubmissions(prev => prev.map(s => {
+          if (s.id === submission.id) {
+            return {
+              ...s,
+              status: "Approved",
+              scores: {
+                ...s.scores,
+                prm: Number(submission.scores?.prm || submission.prmScore || 0),
+                final: Number(submission.scores?.final || submission.finalScore || 0)
+              }
+            };
+          }
+          return s;
+        }));
         toast.success("Submission Disetujui", { description: "Data rumah sakit telah dipublikasikan ke Rankings!" });
         return true;
       } else {
@@ -556,7 +586,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const rejectSubmission = useCallback(async (submissionId: string) => {
+  const rejectSubmission = useCallback(async (submissionId: string, comment?: string) => {
     try {
       const token = sessionStorage.getItem("auth_token") || localStorage.getItem("hospitalToken") || localStorage.getItem("token");
 
@@ -566,7 +596,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${token}`
         },
-        body: JSON.stringify({ status: "Revision Required" })
+        body: JSON.stringify({ status: "Revision Required", adminNotes: comment })
       });
 
       if (response.ok) {
@@ -578,6 +608,62 @@ export function DataProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       console.error("Error rejecting submission:", err);
       return false;
+    }
+  }, []);
+
+  // ============ SUBMISSION LIFECYCLE ============
+  const softDeleteSubmission = useCallback(async (id: string): Promise<boolean> => {
+    try {
+      const ok = await apiSoftDelete(id);
+      if (ok) {
+        // Move from active to deleted
+        const deleted = submissions.find(s => s.id === id);
+        setSubmissions(prev => prev.filter(s => s.id !== id));
+        if (deleted) {
+          setDeletedSubmissions(prev => [{ ...deleted, deletedAt: new Date().toISOString() } as any, ...prev]);
+        }
+        toast.success("Submission Dihapus", { description: "Data dipindahkan ke Recently Deleted." });
+        return true;
+      }
+      toast.error("Gagal menghapus", { description: "Server menolak permintaan." });
+      return false;
+    } catch (err) {
+      console.error("Soft delete error:", err);
+      toast.error("Terjadi Kesalahan");
+      return false;
+    }
+  }, [submissions]);
+
+  const restoreSubmission = useCallback(async (id: string): Promise<boolean> => {
+    try {
+      const ok = await apiRestore(id);
+      if (ok) {
+        // Move from deleted back to active
+        const restored = deletedSubmissions.find(s => s.id === id);
+        setDeletedSubmissions(prev => prev.filter(s => s.id !== id));
+        if (restored) {
+          const { ...cleanRestored } = restored as any;
+          delete cleanRestored.deletedAt;
+          setSubmissions(prev => [cleanRestored as SubmissionData, ...prev]);
+        }
+        toast.success("Submission Dipulihkan", { description: "Data dikembalikan ke daftar aktif." });
+        return true;
+      }
+      toast.error("Gagal memulihkan", { description: "Server menolak permintaan." });
+      return false;
+    } catch (err) {
+      console.error("Restore error:", err);
+      toast.error("Terjadi Kesalahan");
+      return false;
+    }
+  }, [deletedSubmissions]);
+
+  const fetchDeletedSubmissions = useCallback(async () => {
+    try {
+      const deleted = await apiGetDeleted();
+      setDeletedSubmissions(deleted);
+    } catch (err) {
+      console.error("Failed to fetch deleted submissions:", err);
     }
   }, []);
 
@@ -662,6 +748,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
       approvedRankings, publishRanking, unpublishRanking,
       submissions, addSubmission, updateSubmissionStatus,
       approveSubmission, rejectSubmission,
+
+      // Submission lifecycle
+      deletedSubmissions, softDeleteSubmission, restoreSubmission, fetchDeletedSubmissions,
     }}>
       {children}
     </DataContext.Provider>

@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router";
+import { getMySubmissions } from "../utils/api";
 import {
   ArrowLeft,
   CheckCircle2,
@@ -13,8 +14,10 @@ import { useData } from "../context/DataContext";
 
 export function HospitalReviewResultPage() {
   const navigate = useNavigate();
-  const { currentHospital, submissions } = useData();
+  const { currentHospital } = useData();
   const [authData, setAuthData] = useState<{ hospitalName: string; picName: string } | null>(null);
+  const [hospitalSubmissions, setHospitalSubmissions] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
 
   // Check authentication on mount
   useEffect(() => {
@@ -26,27 +29,35 @@ export function HospitalReviewResultPage() {
       return;
     }
 
+    let resolvedName = "";
     if (sessionStr) {
       const parsed = JSON.parse(sessionStr);
+      resolvedName = parsed.hospitalName || parsed.hospital_name || "Unknown";
       setAuthData({
-        // Safely extract the name regardless of how the database formats it
-        hospitalName: parsed.hospitalName || parsed.hospital_name || "Unknown",
+        hospitalName: resolvedName,
         picName: parsed.picName || parsed.pic_name || "Unknown",
       });
     } else if (currentHospital) {
+      resolvedName = currentHospital.hospitalName;
       setAuthData({
         hospitalName: currentHospital.hospitalName,
         picName: currentHospital.picName,
       });
     }
+
+    // Fetch directly from the hospital-scoped endpoint (ignores deleted_at)
+    if (resolvedName) {
+      setLoading(true);
+      getMySubmissions(resolvedName)
+        .then(subs => setHospitalSubmissions(subs))
+        .finally(() => setLoading(false));
+    }
   }, [navigate, currentHospital]);
 
-  if (!authData) return null;
+  if (!authData || loading) return null;
 
-  // Get hospital's submissions
-  const hospitalSubmissions = submissions.filter(
-    (s) => s.hospitalName === authData.hospitalName
-  );
+  // hospitalSubmissions is fetched directly from /submissions/mine (ignores deleted_at)
+  // so hospitals always see their full submission history.
 
   const getStatusColor = (status: string) => {
     const s = status.toLowerCase();
@@ -145,11 +156,11 @@ export function HospitalReviewResultPage() {
                           </div>
                           <div className="flex justify-between items-center text-sm">
                             <span className="text-gray-600">Clinical Audit (60%)</span>
-                            <span className="font-bold text-gray-900">{(submission.scores?.clinicalAudit as number) || 0}</span>
+                            <span className="font-bold text-gray-900">{(submission.scores?.audit as number) || (submission.scores?.clinicalAudit as number) || 0}</span>
                           </div>
                           <div className="flex justify-between items-center text-sm">
                             <span className="text-gray-600">Patient Report (25%)</span>
-                            <span className="font-bold text-gray-900">{(submission.scores?.patientReport as number) || 0}</span>
+                            <span className="font-bold text-gray-900">{(submission.scores?.prm as number) || (submission.scores?.patientReport as number) || 0}</span>
                           </div>
                         </div>
 
@@ -177,12 +188,12 @@ export function HospitalReviewResultPage() {
                           Catatan Tim Reviewer
                         </h4>
 
-                        <div className={`flex-1 rounded-xl p-4 border text-sm leading-relaxed ${submission.reviewerNotes
+                        <div className={`flex-1 rounded-xl p-4 border text-sm leading-relaxed ${submission.adminNotes
                           ? "bg-blue-50/50 border-blue-200 text-gray-800"
                           : "bg-gray-50 border-gray-100 text-gray-400 italic flex items-center justify-center text-center"
                           }`}>
-                          {submission.reviewerNotes ? (
-                            <div className="whitespace-pre-wrap">{submission.reviewerNotes}</div>
+                          {submission.adminNotes ? (
+                            <div className="whitespace-pre-wrap">{submission.adminNotes}</div>
                           ) : (
                             <p>
                               {!isApproved && !isRevision

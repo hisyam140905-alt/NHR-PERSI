@@ -103,8 +103,8 @@ export function RsbkFormPage() {
   useEffect(() => {
     return () => {
       // If the component is unmounting (user switched pages) and didn't use a dedicated button
-      if (isNavigatingAwayRef.current) return; 
-      
+      if (isNavigatingAwayRef.current) return;
+
       const draftId = draftManager.getCurrentDraftId();
       if (draftId && specialty) {
         const current = stateRef.current;
@@ -135,14 +135,14 @@ export function RsbkFormPage() {
 
   const handleSubmit = () => {
     isNavigatingAwayRef.current = true; // Stop the unmount auto-save from interfering
-    
+
     const draftId = draftManager.getCurrentDraftId();
     if (draftId && specialty) {
       // Forcefully update the draft as completed, ignoring the filledItems check
       draftManager.updateDraft(draftId, specialty, "rsbk", {
         data: formData,
         score: totalRsbkScore,
-        completed: true, 
+        completed: true,
       });
     }
 
@@ -166,7 +166,7 @@ export function RsbkFormPage() {
   const handleBackToPortal = () => {
     isNavigatingAwayRef.current = true; // Stop the unmount double-save
     handleSaveDraft(false); // Silent save
-    navigate("/hospital-login"); // Change this if your portal URL is different
+    navigate("/siap-persi/select-specialty"); // Change this if your portal URL is different
   };
 
   return (
@@ -176,9 +176,9 @@ export function RsbkFormPage() {
 
         {/* Header */}
         <div className="mb-6">
-          <Button 
-            variant="ghost" 
-            onClick={handleBackToPortal} 
+          <Button
+            variant="ghost"
+            onClick={handleBackToPortal}
             className="text-[#0F4C81] hover:text-[#0d3d66] hover:bg-blue-50 px-3 h-9 mb-4 -ml-3 transition-colors"
           >
             <ArrowLeft className="w-4 h-4 mr-2" />
@@ -486,7 +486,7 @@ function QuantityInput({ item, value, onChange }: {
               ×{item.pointPerUnit} poin
             </span>
           )}
-          {isFilled && (
+          {isFilled && item.pointPerUnit > 0 && ( /* <--- ADDED CONDITION HERE */
             <span className={`text-xs font-medium ${isMetTarget ? "text-green-600" : "text-orange-600"}`}>
               {pointsEarned}/{targetPoints} poin ({(achievement * 100).toFixed(0)}%)
             </span>
@@ -504,7 +504,7 @@ function QuantityInput({ item, value, onChange }: {
         <span className="text-sm text-gray-500 w-16">{unit}</span>
       </div>
       {isMetTarget && (
-        <div className="bg-green-100 text-green-700 px-2 py-1 rounded text-xs font-semibold">&check; Target</div>
+        <div className="bg-green-100 text-green-700 px-2 py-1 rounded text-xs font-semibold">✓ Target Tercapai</div>
       )}
     </div>
   );

@@ -9,13 +9,13 @@ export interface HospitalSubmission {
   ownership: "Public" | "Private";
   contactEmail: string;
   contactPhone: string;
-  
+
   // Basic Information
   accreditation: string;
   beds: number;
   founded: number;
   specialties: string[];
-  
+
   // Performance Data
   clinicalData: {
     treatmentSuccessRate: number;
@@ -23,20 +23,20 @@ export interface HospitalSubmission {
     mortalityRate: number;
     emergencyResponseTime: number;
   };
-  
+
   researchData: {
     publications: number;
     clinicalTrials: number;
     researchGrants: number;
     medicalEducationPrograms: number;
   };
-  
+
   patientExperienceData: {
     satisfactionScore: number;
     averageWaitTime: number;
     complaintResolutionRate: number;
   };
-  
+
   facilitiesData: {
     ctScanners: number;
     mriMachines: number;
@@ -45,28 +45,28 @@ export interface HospitalSubmission {
     hasEHR: boolean;
     hasTelemedicine: boolean;
   };
-  
+
   safetyData: {
     infectionRate: number;
     adverseEventRate: number;
     medicationErrorRate: number;
   };
-  
+
   // Supporting Documents
   documents: {
     accreditationCertificate?: string;
     annualReport?: string;
     safetyReport?: string;
   };
-  
+
   // Submission metadata
   status: SubmissionStatus;
   submittedAt?: Date;
   reviewedAt?: Date;
   publishedAt?: Date;
   reviewerId?: string;
-  reviewerNotes?: string;
-  
+  adminNotes?: string;
+
   // Review Checklist
   reviewChecklist?: {
     dataAccuracy: boolean;
@@ -76,7 +76,7 @@ export interface HospitalSubmission {
     safetyStandardsMet: boolean;
     researchDataVerified: boolean;
   };
-  
+
   // Calculated Scores
   calculatedScores?: {
     overallScore: number;

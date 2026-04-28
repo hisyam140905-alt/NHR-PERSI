@@ -47,7 +47,7 @@ export interface SubmissionData {
   status: string;
   scores: Record<string, unknown>;
   details?: Record<string, unknown>;
-  reviewerNotes?: string;
+  adminNotes?: string;
 }
 
 export interface RankingData {
@@ -161,6 +161,21 @@ export async function addSubmission(submission: SubmissionData): Promise<boolean
   }
 }
 
+export async function getMySubmissions(hospitalName: string): Promise<SubmissionData[]> {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}${PREFIX}/submissions/mine?hospitalName=${encodeURIComponent(hospitalName)}`,
+      { headers: getAuthHeaders() }
+    );
+    if (!response.ok) return [];
+    const data = await response.json();
+    return data.submissions || [];
+  } catch (err) {
+    console.error("Get My Submissions Error:", err);
+    return [];
+  }
+}
+
 export async function getAllSubmissions(): Promise<SubmissionData[]> {
   try {
     const response = await fetch(`${API_BASE_URL}${PREFIX}/submissions`, {
@@ -228,6 +243,48 @@ export async function getAllRankingsFromDb(): Promise<RankingData[]> {
     return data.rankings || [];
   } catch (err) {
     console.error("Get All Rankings Error:", err);
+    return [];
+  }
+}
+
+// ============ SUBMISSION LIFECYCLE ============
+
+export async function softDeleteSubmission(id: string): Promise<boolean> {
+  try {
+    const response = await fetch(`${API_BASE_URL}${PREFIX}/submissions/${id}`, {
+      method: "DELETE",
+      headers: getAuthHeaders()
+    });
+    return response.ok;
+  } catch (err) {
+    console.error("Soft Delete Submission Error:", err);
+    return false;
+  }
+}
+
+export async function restoreSubmission(id: string): Promise<boolean> {
+  try {
+    const response = await fetch(`${API_BASE_URL}${PREFIX}/submissions/${id}/restore`, {
+      method: "POST",
+      headers: getAuthHeaders()
+    });
+    return response.ok;
+  } catch (err) {
+    console.error("Restore Submission Error:", err);
+    return false;
+  }
+}
+
+export async function getDeletedSubmissions(): Promise<SubmissionData[]> {
+  try {
+    const response = await fetch(`${API_BASE_URL}${PREFIX}/submissions/deleted`, {
+      headers: getAuthHeaders()
+    });
+    if (!response.ok) return [];
+    const data = await response.json();
+    return data.submissions || [];
+  } catch (err) {
+    console.error("Get Deleted Submissions Error:", err);
     return [];
   }
 }
@@ -526,7 +583,7 @@ export const deleteHospitalDraft = async (draftId: string): Promise<boolean> => 
     const response = await fetch(`${API_BASE_URL}${PREFIX}/drafts/delete/${draftId}`, {
       method: "DELETE",
       // Use the upgraded auth headers so the server doesn't reject the request
-      headers: getAuthHeaders() 
+      headers: getAuthHeaders()
     });
 
     return response.ok;

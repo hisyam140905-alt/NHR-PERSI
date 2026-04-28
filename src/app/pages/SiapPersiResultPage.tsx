@@ -33,6 +33,75 @@ export function SiapPersiResultPage() {
   const prmWeighted = Number((patientReportScore * 0.25).toFixed(2));
   const totalSiapScore = Number((rsbkWeighted + auditWeighted + prmWeighted).toFixed(2));
 
+  // ============ PER-DISEASE BREAKDOWN ============
+  const draftId = draftManager.getCurrentDraftId();
+  const draft = draftId ? draftManager.getDraftById(draftId) : null;
+  const specProgress = draft?.progress[specialty || ""];
+  const diseases = specialtyInfo?.diseases || [];
+
+  // Validity weight helper (matches ClinicalAuditPage & PatientReportPage)
+  const getValidity = (n: number) => {
+    if (n <= 0) return 0;
+    if (n <= 5) return 0.80;
+    if (n <= 10) return 0.85;
+    if (n <= 20) return 0.92;
+    return 1.0;
+  };
+
+  // --- Clinical Audit per-disease ---
+  const auditFormData = (specProgress?.clinicalAudit?.data || {}) as Record<string, string>;
+  const auditDiseaseMetrics = diseases.map((d) => {
+    let totalScore = 0;
+    let completedPatients = 0;
+    for (let p = 1; p <= 30; p++) {
+      let isComplete = true;
+      const cats: Record<string, { total: number; count: number; weight: number }> = {};
+      d.questions.forEach((q) => {
+        const key = `${p}-${q.id}`;
+        if (!auditFormData[key]) { isComplete = false; return; }
+        const wm = q.category.match(/(\d+)%/);
+        const w = wm ? parseInt(wm[1]) / 100 : 0.25;
+        const cn = q.category.replace(/\s*\(\d+%\)/, "");
+        if (!cats[cn]) cats[cn] = { total: 0, count: 0, weight: w };
+        cats[cn].total += (auditFormData[key] === "sesuai" || auditFormData[key] === "tidak-sesuai-pengecualian") ? 1 : 0;
+        cats[cn].count++;
+      });
+      if (isComplete) {
+        let ws = 0;
+        Object.values(cats).forEach(c => { if (c.count > 0) ws += (c.total / c.count) * 100 * c.weight; });
+        totalScore += Math.round(ws);
+        completedPatients++;
+      }
+    }
+    const rawScore = completedPatients > 0 ? Math.round(totalScore / completedPatients) : 0;
+    const validity = getValidity(completedPatients);
+    return {
+      name: d.diseaseName, weight: d.weight, patientCount: completedPatients,
+      rawScore, validity, weightedScore: Math.round(rawScore * validity),
+    };
+  });
+  const totalAuditPatients = auditDiseaseMetrics.reduce((s, d) => s + d.patientCount, 0);
+
+  // --- PRM per-disease (with custom/hybrid PDF detection) ---
+  const prmDiseaseScores = (specProgress?.patientReport as any)?.diseaseScores || {};
+  const prmDiseaseMetrics = diseases.map((d, idx) => {
+    const key = `${specialty}-d${idx}`;
+    const ds = prmDiseaseScores[key] || {};
+    const isCustom = !!ds.customSurveyUploaded;
+    const patientCount = ds.patientCount || ds.nativePatientCount || 0;
+    const rawScore = ds.rawScore ?? ds.score ?? 0;
+    const nativeCount = ds.nativePatientCount || 0;
+    const validity = getValidity(nativeCount);
+    return {
+      name: d.diseaseName, weight: d.weight, patientCount, nativeCount,
+      rawScore, validity, isCustom,
+      weightedScore: isCustom ? 0 : Math.round(rawScore * validity),
+      pathway: isCustom ? "Survei Mandiri (PDF)" : nativeCount > 0 && ds.customPatientCount > 0 ? "Hybrid" : "Survei Digital",
+    };
+  });
+  const totalPrmPatients = prmDiseaseMetrics.reduce((s, d) => s + d.patientCount, 0);
+  const hasAnyCustomPRM = prmDiseaseMetrics.some(d => d.isCustom);
+
   const handleContinueToNext = () => {
     if (nextSpecialty) {
       navigate(`/siap-persi/rsbk/${nextSpecialty}`);
@@ -51,6 +120,7 @@ export function SiapPersiResultPage() {
       const rsbk = parseFloat(sessionStorage.getItem(`${spec}_rsbkScore`) || "0");
       const audit = parseFloat(sessionStorage.getItem(`${spec}_clinicalAuditScore`) || "0");
       const report = parseFloat(sessionStorage.getItem(`${spec}_patientReportScore`) || "0");
+      const reportRaw = parseFloat(sessionStorage.getItem(`${spec}_patientReportRawScore`) || "0");
       const final = Number(((rsbk * 0.15) + (audit * 0.60) + (report * 0.25)).toFixed(2));
 
       // Get real raw data from draft
@@ -77,13 +147,17 @@ export function SiapPersiResultPage() {
           rsbk,
           clinicalAudit: audit,
           patientReport: report,
+          patientReportRaw: reportRaw,
           final,
         },
         details: {
           specialties: [{ specialty: info.name, disease: info.disease }],
           rsbkData: specProgress?.rsbk.data || {},
           auditData: specProgress?.clinicalAudit.data || {},
-          prmData: specProgress?.patientReport.data || {},
+          prmData: {
+            ...(specProgress?.patientReport.data || {}),
+            diseaseScores: (specProgress?.patientReport as any)?.diseaseScores || {},
+          },
         },
       });
 
@@ -91,6 +165,7 @@ export function SiapPersiResultPage() {
       sessionStorage.removeItem(`${spec}_rsbkScore`);
       sessionStorage.removeItem(`${spec}_clinicalAuditScore`);
       sessionStorage.removeItem(`${spec}_patientReportScore`);
+      sessionStorage.removeItem(`${spec}_patientReportRawScore`);
     });
 
     // Cleanup draft
@@ -156,6 +231,7 @@ export function SiapPersiResultPage() {
                 </tr>
               </thead>
               <tbody>
+                {/* === RSBK === */}
                 <tr className="border-b border-gray-200 bg-blue-50/50">
                   <td className="py-4 px-4">
                     <div className="font-medium text-gray-900">Hospital Structure Form</div>
@@ -170,48 +246,138 @@ export function SiapPersiResultPage() {
                     </span>
                   </td>
                 </tr>
+
+                {/* === CLINICAL AUDIT (parent header) === */}
                 <tr className="border-b border-gray-200 bg-purple-50/50">
                   <td className="py-4 px-4">
                     <div className="font-medium text-gray-900">Clinical Audit</div>
-                    <div className="text-xs text-gray-500">30 rekam medis pasien</div>
+                    <div className="text-xs text-gray-500">{totalAuditPatients} rekam medis pasien terisi</div>
                   </td>
-                  <td className="py-4 px-4 text-center font-bold text-purple-700">{clinicalAuditScore}</td>
-                  <td className="py-4 px-4 text-center text-gray-600">60%</td>
-                  <td className="py-4 px-4 text-center font-bold text-purple-700">{auditWeighted}</td>
+                  {/* Empty columns to align with the header, or you can use colSpan */}
+                  <td className="py-4 px-4"></td>
+                  <td className="py-4 px-4"></td>
+                  <td className="py-4 px-4"></td>
                   <td className="py-4 px-4 text-center">
                     <span className="inline-flex items-center gap-1 text-green-700 text-xs font-semibold">
                       <CheckCircle2 className="w-4 h-4" /> Selesai
                     </span>
                   </td>
                 </tr>
+
+                {/* Audit per-disease sub-rows */}
+                {auditDiseaseMetrics.map((d, i) => (
+                  <tr key={`audit-${i}`} className="border-b border-gray-100 bg-purple-50/20">
+                    <td className="py-2 px-4 pl-10 text-xs text-gray-700">
+                      <span className="text-purple-400 mr-1">└</span> {d.name}
+                      <span className="ml-2 text-gray-400">
+                        ({d.patientCount}/30 RM, nilai rata-rata {d.rawScore}, validitas {(d.validity * 100).toFixed(0)}%)
+                      </span>
+                    </td>
+                    <td className="py-2 px-4 text-center text-xs font-bold text-purple-700">{d.weightedScore}</td>
+                    <td className="py-2 px-4"></td>
+                    <td className="py-2 px-4"></td>
+                    <td className="py-2 px-4"></td>
+                  </tr>
+                ))}
+
+                {/* === CLINICAL AUDIT (summary footer) === */}
+                <tr className="border-b-2 border-purple-200 bg-purple-50/50">
+                  <td className="py-3 px-4 pr-6 text-right text-sm font-semibold text-gray-800">
+                    Total Skor Clinical Audit
+                  </td>
+                  <td className="py-3 px-4 text-center font-bold text-purple-700 text-lg">
+                    {clinicalAuditScore}
+                  </td>
+                  <td className="py-3 px-4 text-center text-gray-600 font-medium">
+                    60%
+                  </td>
+                  <td className="py-3 px-4 text-center font-bold text-purple-700 text-lg">
+                    {auditWeighted}
+                  </td>
+                  <td className="py-3 px-4"></td>
+                </tr>
+
+                {/* === PATIENT REPORT (parent header) === */}
                 <tr className="border-b border-gray-200 bg-teal-50/50">
                   <td className="py-4 px-4">
                     <div className="font-medium text-gray-900">Patient Report (PREM & PROM)</div>
-                    <div className="text-xs text-gray-500">Target optimal 30 pasien</div>
+                    <div className="text-xs text-gray-500">
+                      {totalPrmPatients} pasien terisi
+                      {hasAnyCustomPRM && <span className="ml-1 text-amber-600 font-semibold">• Mengandung Survei Mandiri</span>}
+                    </div>
                   </td>
-                  <td className="py-4 px-4 text-center font-bold text-teal-700">{patientReportScore}</td>
-                  <td className="py-4 px-4 text-center text-gray-600">25%</td>
-                  <td className="py-4 px-4 text-center font-bold text-teal-700">{prmWeighted}</td>
+                  {/* Empty columns to maintain alignment */}
+                  <td className="py-4 px-4"></td>
+                  <td className="py-4 px-4"></td>
+                  <td className="py-4 px-4"></td>
                   <td className="py-4 px-4 text-center">
                     <span className="inline-flex items-center gap-1 text-green-700 text-xs font-semibold">
                       <CheckCircle2 className="w-4 h-4" /> Selesai
                     </span>
                   </td>
                 </tr>
+
+                {/* PRM per-disease sub-rows */}
+                {prmDiseaseMetrics.map((d, i) => (
+                  <tr key={`prm-${i}`} className={`border-b border-gray-100 ${d.isCustom ? "bg-amber-50/30" : "bg-teal-50/20"}`}>
+                    <td className="py-2 px-4 pl-10 text-xs text-gray-700">
+                      <span className="text-teal-400 mr-1">└</span> {d.name}
+                      <span className="ml-2">
+                        {d.isCustom ? (
+                          <span className="px-1.5 py-0.5 bg-amber-100 text-amber-700 text-[10px] font-bold rounded border border-amber-200">PDF</span>
+                        ) : d.pathway === "Hybrid" ? (
+                          <span className="px-1.5 py-0.5 bg-blue-100 text-blue-700 text-[10px] font-bold rounded border border-blue-200">Hybrid</span>
+                        ) : (
+                          <span className="px-1.5 py-0.5 bg-green-100 text-green-700 text-[10px] font-bold rounded border border-green-200">Digital</span>
+                        )}
+                      </span>
+                      {!d.isCustom && <span className="ml-2 text-gray-400">({d.patientCount} pasien, nilai rata-rata {d.rawScore}, validitas {(d.validity * 100).toFixed(0)}%)</span>}
+                    </td>
+                    <td className="py-2 px-4 text-center text-xs font-bold">
+                      {d.isCustom ? <span className="text-amber-600">0</span> : <span className="text-teal-700">{d.weightedScore}</span>}
+                    </td>
+                    {/* Added two extra empty <td> tags to ensure the 5-column layout doesn't break */}
+                    <td className="py-2 px-4"></td>
+                    <td className="py-2 px-4"></td>
+                    <td className="py-2 px-4"></td>
+                  </tr>
+                ))}
+
+                {/* === PATIENT REPORT (summary footer) === */}
+                <tr className="border-b-2 border-teal-200 bg-teal-50/50">
+                  <td className="py-3 px-4 pr-6 text-right text-sm font-semibold text-gray-800">
+                    Total Skor Patient Report
+                  </td>
+                  <td className="py-3 px-4 text-center font-bold text-teal-700 text-lg">
+                    {patientReportScore}
+                  </td>
+                  <td className="py-3 px-4 text-center text-gray-600 font-medium">
+                    25%
+                  </td>
+                  <td className="py-3 px-4 text-center font-bold text-teal-700 text-lg">
+                    {prmWeighted}
+                  </td>
+                  <td className="py-3 px-4"></td>
+                </tr>
               </tbody>
+
+              {/* === GRAND TOTAL FOOTER === */}
               <tfoot>
                 <tr className="bg-[#0F4C81]/10">
-                  <td className="py-4 px-4 font-bold text-[#0F4C81] text-lg" colSpan={3}>
-                    Total Skor NHR PERSI
-                  </td>
-                  <td className="py-4 px-4 text-center font-bold text-[#0F4C81] text-3xl">
-                    {totalSiapScore}
-                  </td>
+                  <td className="py-4 px-4 font-bold text-[#0F4C81] text-lg" colSpan={3}>Total Skor NHR PERSI</td>
+                  <td className="py-4 px-4 text-center font-bold text-[#0F4C81] text-3xl">{totalSiapScore}</td>
                   <td className="py-4 px-4"></td>
                 </tr>
               </tfoot>
             </table>
           </div>
+
+          {hasAnyCustomPRM && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800 mb-4">
+              <strong>Catatan:</strong> Penyakit dengan jalur Survei Mandiri (PDF) otomatis mendapat skor 0.
+              Skor final akan dihitung ulang oleh Tim Reviewer PERSI setelah verifikasi dokumen PDF.
+            </div>
+          )}
 
           <div className="bg-gray-50 rounded-lg p-3 text-xs text-gray-600">
             <p><strong>Rumus:</strong> Total = (RSBK x 15%) + (Clinical Audit x 60%) + (Patient Report x 25%)</p>
@@ -242,7 +408,7 @@ export function SiapPersiResultPage() {
                 <CheckCircle2 className="w-6 h-6 text-green-600" />
                 <div>
                   <p className="font-semibold text-gray-900">Clinical Audit</p>
-                  <p className="text-sm text-gray-600">30 rekam medis pasien</p>
+                  <p className="text-sm text-gray-600">{totalAuditPatients} rekam medis pasien terisi</p>
                 </div>
               </div>
               <div className="text-right">
@@ -256,7 +422,7 @@ export function SiapPersiResultPage() {
                 <CheckCircle2 className="w-6 h-6 text-green-600" />
                 <div>
                   <p className="font-semibold text-gray-900">Patient Report (PREM & PROM)</p>
-                  <p className="text-sm text-gray-600">Target optimal 30 pasien</p>
+                  <p className="text-sm text-gray-600">{totalPrmPatients} pasien terisi{hasAnyCustomPRM && " • Termasuk Survei Mandiri"}</p>
                 </div>
               </div>
               <div className="text-right">

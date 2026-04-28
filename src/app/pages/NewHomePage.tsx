@@ -37,24 +37,24 @@ export function NewHomePage() {
     <div className="min-h-screen">
       {/* Announcement Banner */}
       <div className="bg-[#1E3A8A] text-white py-3">
-        <div className="max-w-7xl mx-auto px-6 flex items-center justify-between">
-          <p className="flex items-center gap-2 text-sm">
-            <Sparkles className="w-4 h-4 text-[#D97706]" />
+        <div className="max-w-7xl mx-auto px-6 flex flex-col md:flex-row items-center justify-between gap-3 md:gap-0">
+          <p className="flex flex-col sm:flex-row items-center gap-1 sm:gap-2 text-sm text-center md:text-left">
+            <Sparkles className="w-4 h-4 text-[#D97706] shrink-0" />
             <span>
               NHR PERSI Assessment 2026 kini terbuka untuk seluruh rumah sakit
               anggota PERSI.
             </span>
           </p>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center justify-center gap-3 md:gap-4 flex-wrap">
             <Link
               to="/hospital-login"
-              className="text-sm font-[600] border border-white/40 rounded-lg px-4 py-1.5 hover:bg-white/10 transition-colors"
+              className="text-sm font-[600] border border-white/40 rounded-lg px-4 py-1.5 hover:bg-white/10 transition-colors whitespace-nowrap"
             >
               Ikuti Assessment
             </Link>
             <Link
               to="/methodology"
-              className="text-sm text-white/70 hover:text-white transition-colors"
+              className="text-sm text-white/70 hover:text-white transition-colors whitespace-nowrap"
             >
               Pelajari lebih lanjut
             </Link>
@@ -70,7 +70,8 @@ export function NewHomePage() {
         </div>
         <div className="max-w-7xl mx-auto px-6 py-20 relative">
           <div className="grid lg:grid-cols-2 gap-12 items-center">
-            <div>
+            {/* Bagian teks dan tombol diubah di sini */}
+            <div className="text-center lg:text-left flex flex-col items-center lg:items-start">
               <div className="inline-flex items-center gap-2 bg-white/10 backdrop-blur-sm rounded-full px-4 py-2 mb-6 border border-white/20">
                 <Activity className="w-4 h-4 text-[#0D9488]" />
                 <span className="text-sm font-[500]">
@@ -82,12 +83,12 @@ export function NewHomePage() {
                 <br />
                 <span className="text-[#0D9488]">Berdasarkan Data Objektif.</span>
               </h1>
-              <p className="text-lg text-white/80 mb-8 leading-relaxed max-w-xl">
+              <p className="text-lg text-white/80 mb-8 leading-relaxed max-w-xl mx-auto lg:mx-0">
                 Transparansi kualitas rumah sakit di Indonesia untuk pelayanan
                 Jantung, Syaraf, dan Kanker. Standar yang diakui, hasil yang
                 terverifikasi.
               </p>
-              <div className="flex flex-wrap gap-4">
+              <div className="flex flex-wrap justify-center lg:justify-start gap-4">
                 <Link to="/rankings">
                   <Button className="bg-white text-[#1E3A8A] hover:bg-white/90 h-12 px-8 font-[600]">
                     Lihat Ranking
@@ -104,6 +105,7 @@ export function NewHomePage() {
                 </Link>
               </div>
             </div>
+            {/* Bagian kartu di sebelah kanan */}
             <div className="hidden lg:block">
               <div className="relative">
                 <div className="bg-white/10 backdrop-blur-md rounded-2xl border border-white/20 p-8">
@@ -210,71 +212,69 @@ export function NewHomePage() {
             <div className="overflow-x-auto">
               <table className="w-full min-w-[800px]">
                 <thead className="bg-gray-50 border-b border-gray-200">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-[600] text-gray-500 uppercase">
-                    Rank
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-[600] text-gray-500 uppercase">
-                    Rumah Sakit
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-[600] text-gray-500 uppercase">
-                    Pelayanan
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-[600] text-gray-500 uppercase">
-                    Skor
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-[600] text-gray-500 uppercase">
-                    Grade
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {approvedRankings.slice(0, 5).map((r, idx) => (
-                  <tr key={r.id} className="hover:bg-gray-50">
-                    <td className="px-6 py-4">
-                      <span
-                        className={`inline-flex items-center justify-center w-8 h-8 rounded-full font-[700] text-sm ${
-                          idx < 3
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-[600] text-gray-500 uppercase">
+                      Rank
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-[600] text-gray-500 uppercase">
+                      Rumah Sakit
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-[600] text-gray-500 uppercase">
+                      Pelayanan
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-[600] text-gray-500 uppercase">
+                      Skor
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-[600] text-gray-500 uppercase">
+                      Grade
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {approvedRankings.slice(0, 5).map((r, idx) => (
+                    <tr key={r.id} className="hover:bg-gray-50">
+                      <td className="px-6 py-4">
+                        <span
+                          className={`inline-flex items-center justify-center w-8 h-8 rounded-full font-[700] text-sm ${idx < 3
                             ? "bg-[#D97706] text-white"
                             : "bg-gray-100 text-gray-600"
-                        }`}
-                      >
-                        {idx + 1}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="font-[600] text-gray-900">
-                        {r.hospitalName}
-                      </div>
-                      <div className="text-sm text-gray-500">
-                        {r.city}, {r.province}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 text-sm text-gray-600">
-                      {r.specialty}
-                    </td>
-                    <td className="px-6 py-4 font-[700] text-[#1E3A8A]">
-                      {r.finalScore.toFixed(1)}
-                    </td>
-                    <td className="px-6 py-4">
-                      <span
-                        className={`px-2.5 py-1 rounded-md text-xs font-[600] ${
-                          r.grade === "A"
+                            }`}
+                        >
+                          {idx + 1}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="font-[600] text-gray-900">
+                          {r.hospitalName}
+                        </div>
+                        <div className="text-sm text-gray-500">
+                          {r.city}, {r.province}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 text-sm text-gray-600">
+                        {r.specialty}
+                      </td>
+                      <td className="px-6 py-4 font-[700] text-[#1E3A8A]">
+                        {r.finalScore.toFixed(1)}
+                      </td>
+                      <td className="px-6 py-4">
+                        <span
+                          className={`px-2.5 py-1 rounded-md text-xs font-[600] ${r.grade === "A"
                             ? "bg-green-100 text-green-700"
                             : r.grade === "B"
-                            ? "bg-blue-100 text-blue-700"
-                            : r.grade === "C"
-                            ? "bg-yellow-100 text-yellow-700"
-                            : "bg-red-100 text-red-700"
-                        }`}
-                      >
-                        {r.grade}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                              ? "bg-blue-100 text-blue-700"
+                              : r.grade === "C"
+                                ? "bg-yellow-100 text-yellow-700"
+                                : "bg-red-100 text-red-700"
+                            }`}
+                        >
+                          {r.grade}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         ) : (
@@ -334,7 +334,7 @@ export function NewHomePage() {
             </Link>
           </div>
 
-          <motion.div 
+          <motion.div
             className="grid md:grid-cols-3 gap-6"
             initial="hidden"
             whileInView="visible"
@@ -342,7 +342,7 @@ export function NewHomePage() {
             variants={{ visible: { transition: { staggerChildren: 0.1 } } }}
           >
             {latestNews.map((item) => (
-              <motion.div 
+              <motion.div
                 key={item.id}
                 variants={{
                   hidden: { opacity: 0, y: 20 },
@@ -361,15 +361,14 @@ export function NewHomePage() {
                     </div>
                     <div className="p-5 flex-1 flex flex-col">
                       <span
-                        className={`inline-block w-fit text-[10px] font-[600] uppercase px-2 py-0.5 rounded mb-2 ${
-                          item.category === "berita"
-                            ? "bg-blue-100 text-blue-700"
-                            : item.category === "publikasi"
+                        className={`inline-block w-fit text-[10px] font-[600] uppercase px-2 py-0.5 rounded mb-2 ${item.category === "berita"
+                          ? "bg-blue-100 text-blue-700"
+                          : item.category === "publikasi"
                             ? "bg-green-100 text-green-700"
                             : item.category === "regulasi"
-                            ? "bg-purple-100 text-purple-700"
-                            : "bg-orange-100 text-orange-700"
-                        }`}
+                              ? "bg-purple-100 text-purple-700"
+                              : "bg-orange-100 text-orange-700"
+                          }`}
                       >
                         {item.category}
                       </span>
@@ -418,7 +417,7 @@ export function NewHomePage() {
         </div>
 
         {upcomingEvents.length > 0 ? (
-          <motion.div 
+          <motion.div
             className="grid md:grid-cols-3 gap-6"
             initial="hidden"
             whileInView="visible"
@@ -444,15 +443,14 @@ export function NewHomePage() {
                     />
                     <div className="absolute top-3 left-3">
                       <span
-                        className={`px-2.5 py-1 rounded-md text-xs font-[600] ${
-                          event.type === "congress"
-                            ? "bg-[#1E3A8A] text-white"
-                            : event.type === "workshop"
+                        className={`px-2.5 py-1 rounded-md text-xs font-[600] ${event.type === "congress"
+                          ? "bg-[#1E3A8A] text-white"
+                          : event.type === "workshop"
                             ? "bg-[#0D9488] text-white"
                             : event.type === "seminar"
-                            ? "bg-[#D97706] text-white"
-                            : "bg-purple-600 text-white"
-                        }`}
+                              ? "bg-[#D97706] text-white"
+                              : "bg-purple-600 text-white"
+                          }`}
                       >
                         {event.type.charAt(0).toUpperCase() +
                           event.type.slice(1)}
@@ -706,7 +704,7 @@ function PillarCard({
   color: string;
 }) {
   return (
-    <motion.div 
+    <motion.div
       whileHover={{ y: -8 }}
       className="bg-white rounded-xl p-6 shadow-lg border border-gray-100 hover:shadow-xl transition-all"
     >

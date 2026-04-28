@@ -47,7 +47,7 @@ export function PatientReportPage() {
 
   // --- THE PREFIX + ID FIX ---
   const sessionStr = sessionStorage.getItem("persi_hospital_session") || sessionStorage.getItem("hospitalAuth");
-  
+
   // 1. Parse the raw session object
   const rawSession = sessionStr ? JSON.parse(sessionStr) : {};
 
@@ -56,17 +56,17 @@ export function PatientReportPage() {
   const currentHospital = rawSession.data || rawSession;
 
   const realHospitalName = currentHospital.hospitalName || currentHospital.hospital_name || "Unknown Hospital";
-  
+
   // 1. Extract up to the first 2 words (e.g., "RSUD Sleman", "RS Paru") and format with hyphen
   const nameParts = realHospitalName.replace(/[^a-zA-Z0-9\s]/g, '').trim().split(/\s+/);
   const shortName = nameParts.slice(0, 2).join('-').toUpperCase() || "HOS";
-  
+
   // 2. Strip out the annoying "hosp-" string from the database ID
   const cleanId = currentHospital?.id ? String(currentHospital.id).replace('hosp-', '') : '';
 
   // 3. Combine into the clean format: RSUD-SLEMAN-1776679507569
-  const hospitalCode = cleanId 
-    ? `${shortName}-${cleanId}` 
+  const hospitalCode = cleanId
+    ? `${shortName}-${cleanId}`
     : currentHospital?.email
       ? `${shortName}-${currentHospital.email.split("@")[0].replace(/[^a-zA-Z0-9]/g, "").toUpperCase()}`
       : `${shortName}-001`;
@@ -89,11 +89,16 @@ export function PatientReportPage() {
   const [newPatientRM, setNewPatientRM] = useState("");
   const [registerError, setRegisterError] = useState("");
   const [loading, setLoading] = useState(true);
-  
+
   // Custom hospital survey upload
   const [customSurveyUploaded, setCustomSurveyUploaded] = useState(false);
   const [customSurveyFileName, setCustomSurveyFileName] = useState<string>("");
   const [customSurveyPatientCount, setCustomSurveyPatientCount] = useState<number>(0);
+
+  // Patient count dialog state
+  const [showInputPatientsDialog, setShowInputPatientsDialog] = useState(false);
+  const [patientCountInput, setPatientCountInput] = useState("");
+  const pendingUploadDocRef = useRef<{ fileName: string; base64: string; fileInputRef: HTMLInputElement | null } | null>(null);
 
   // ---> THE FIX: Bind the PDF storage slot strictly to the current draft
   const customSurveyKey = `custom-survey-${currentDraftId}-${hospitalCode}-${diseaseSpecialtyKey}`;
@@ -120,63 +125,69 @@ export function PatientReportPage() {
     if (!file) return;
 
     if (file.size > 2 * 1024 * 1024) {
-      alert("Ukuran file maksimal 2MB. Vercel LocalStorage memiliki kuota yang terbatas.");
-      e.target.value = ""; // Reset input cache
+      toast.error("File Terlalu Besar", { description: "Ukuran file maksimal 2MB." });
+      e.target.value = "";
       return;
     }
 
     if (file.type !== "application/pdf") {
-      alert("Hanya format PDF yang diperbolehkan");
-      e.target.value = ""; // Reset input cache
+      toast.error("Format Tidak Valid", { description: "Hanya format PDF yang diperbolehkan." });
+      e.target.value = "";
       return;
     }
 
-    const countStr = prompt("Berapa jumlah pasien yang disurvei dalam dokumen PDF ini?\n(Kosongkan atau isi 0 jika tidak tahu/ingin menggunakan kombinasi dengan QR Code)", "0");
-    if (countStr === null) {
-      e.target.value = ""; // Reset if user clicks Cancel
-      return;
-    }
-    
-    const count = parseInt(countStr, 10);
-    if (isNaN(count) || count < 0) {
-      alert("Jumlah pasien tidak valid.");
-      e.target.value = ""; // Reset input cache
-      return;
-    }
-
+    // Read the file first, then open the dialog to ask for patient count
     const reader = new FileReader();
     reader.onload = (event) => {
       const base64 = event.target?.result as string;
-      const doc = {
+      // Store pending data in a ref so the dialog can access it
+      pendingUploadDocRef.current = {
         fileName: file.name,
         base64,
-        patientCount: Math.min(count, 30),
-        uploadedAt: new Date().toISOString(),
-        hospitalCode,
-        realHospitalName,
-        
-        // FIX: Save the display name (e.g. "Kardiologi") instead of the URL slug 
-        // so it perfectly matches what the Admin Review filter expects!
-        specialty: specData?.name || specialty, 
-        
-        diseaseName: activeDisease?.diseaseName || ""
+        fileInputRef: e.target,
       };
-
-      try {
-        localStorage.setItem(customSurveyKey, JSON.stringify(doc));
-        setCustomSurveyFileName(file.name);
-        setCustomSurveyPatientCount(doc.patientCount);
-        setCustomSurveyUploaded(true);
-        toast.success("Upload Berhasil", { description: `File PDF survei untuk ${activeDisease?.diseaseName} telah diunggah!` });
-      } catch (err) {
-        toast.error("Gagal Mengunggah", { description: "Mungkin ukuran terlalu besar (Storage Penuh/Melebihi Kuota)." });
-      }
-      
-      e.target.value = ""; // Reset input cache for future uploads
+      setPatientCountInput("");
+      setShowInputPatientsDialog(true);
     };
     reader.readAsDataURL(file);
+    // Reset the input value right away so re-selecting the same file works
+    e.target.value = "";
   };
-  
+
+  const handleSavePatientCount = () => {
+    const pending = pendingUploadDocRef.current;
+    if (!pending) return;
+
+    const count = patientCountInput === "" ? 0 : parseInt(patientCountInput, 10);
+    const safeCount = isNaN(count) || count < 0 ? 0 : count;
+
+    const doc = {
+      fileName: pending.fileName,
+      base64: pending.base64,
+      patientCount: Math.min(safeCount, 30),
+      uploadedAt: new Date().toISOString(),
+      hospitalCode,
+      realHospitalName,
+      // Save the display name so the Admin Review filter matches correctly
+      specialty: specData?.name || specialty,
+      diseaseName: activeDisease?.diseaseName || "",
+    };
+
+    try {
+      localStorage.setItem(customSurveyKey, JSON.stringify(doc));
+      setCustomSurveyFileName(doc.fileName);
+      setCustomSurveyPatientCount(doc.patientCount);
+      setCustomSurveyUploaded(true);
+      toast.success("Upload Berhasil", { description: `File PDF survei untuk ${activeDisease?.diseaseName} telah diunggah!` });
+    } catch {
+      toast.error("Gagal Mengunggah", { description: "Mungkin ukuran terlalu besar (Storage Penuh/Melebihi Kuota)." });
+    }
+
+    pendingUploadDocRef.current = null;
+    setShowInputPatientsDialog(false);
+    setPatientCountInput("");
+  };
+
   const handleRemoveFile = () => {
     localStorage.removeItem(customSurveyKey);
     setCustomSurveyFileName("");
@@ -285,11 +296,9 @@ export function PatientReportPage() {
       ? Math.round(surveyResponses.reduce((s, r) => s + r.promScore, 0) / surveyResponses.length)
       : 0;
 
-  const overallScore = customSurveyUploaded
-    ? 0 // Menunggu Review
-    : surveyResponses.length > 0
-      ? Math.round(surveyResponses.reduce((s, r) => s + r.overallScore, 0) / surveyResponses.length)
-      : 0;
+  const overallScore = surveyResponses.length > 0
+    ? Math.round(surveyResponses.reduce((s, r) => s + r.overallScore, 0) / surveyResponses.length)
+    : 0;
 
   const progress = Math.min((patientCount / targetPatientCount) * 100, 100);
   const isQRLocked = customSurveyUploaded && customSurveyPatientCount >= 30;
@@ -364,15 +373,73 @@ export function PatientReportPage() {
 
   useEffect(() => {
     if (isNavigatingAwayRef.current) return;
-    
+
     const draftId = draftManager.getCurrentDraftId();
     if (draftId && specialty) {
-      draftManager.updateDraft(draftId, specialty, "patientReport", {
-        data: { registeredPatients }, // Use the actual object, not the string
-        patientCount,
-        score: overallScore,
-        completed: false,
+      const formattedPatients = patientsWithStatus.map(p => ({
+        ...p,
+        patientName: p.name // Enforcing strict naming constraint locally
+      }));
+
+      const existingDraft = draftManager.getDraftById(draftId);
+      const existingPRM = existingDraft?.progress[specialty]?.patientReport || { data: {}, diseaseScores: {} };
+
+      const mergedData = {
+        ...(existingPRM.data || {}),
+        [diseaseSpecialtyKey]: { registeredPatients: formattedPatients }
+      };
+
+      const mergedScores = {
+        ...((existingPRM as any).diseaseScores || {}),
+        [diseaseSpecialtyKey]: {
+          score: overallScore, // fallback compatibility
+          rawScore: overallScore,
+          nativePatientCount: surveyResponses.length,
+          customPatientCount: customSurveyUploaded ? customSurveyPatientCount : 0,
+          patientCount, // total
+          customSurveyUploaded
+        }
+      };
+
+      let totalWeightedScore = 0;
+      let totalRawScore = 0;
+      let hasAnyCustom = false;
+      specData?.diseases.forEach((_d: any, idx: number) => {
+        const key = `${specialty}-d${idx}`;
+        const w = 0.5; // Hardcoded 50/50 split for disease 1 and 2
+        const dScore = mergedScores[key]?.rawScore !== undefined ? mergedScores[key].rawScore : (mergedScores[key]?.score || 0);
+        const nativePCount = mergedScores[key]?.nativePatientCount || 0;
+        const isCustom = mergedScores[key]?.customSurveyUploaded;
+
+        if (isCustom) hasAnyCustom = true;
+
+        let validityWeight = 0;
+        if (nativePCount <= 0) validityWeight = 0;
+        else if (nativePCount <= 5) validityWeight = 0.80;
+        else if (nativePCount <= 10) validityWeight = 0.85;
+        else if (nativePCount <= 20) validityWeight = 0.92;
+        else validityWeight = 1.0;
+
+        const weightedDScore = Math.round(dScore * validityWeight);
+        if (mergedScores[key]) {
+          mergedScores[key].weightedScore = isCustom ? 0 : weightedDScore;
+        }
+
+        totalWeightedScore += (isCustom ? 0 : weightedDScore) * w;
+        totalRawScore += dScore * w;
       });
+
+      if (hasAnyCustom) {
+        totalWeightedScore = 0;
+      }
+
+      draftManager.updateDraft(draftId, specialty, "patientReport", {
+        data: mergedData,
+        diseaseScores: mergedScores,
+        patientCount,
+        score: Math.round(totalWeightedScore),
+        completed: false,
+      } as any);
     }
     // We explicitly track the stringified version so polling doesn't trigger this!
   }, [registeredPatientsString, patientCount, overallScore, specialty]);
@@ -380,14 +447,18 @@ export function PatientReportPage() {
   // --- Adjusted Button Handlers ---
   const handleSaveDraft = async (showToast = true) => {
     if (!specialty) return;
-    
+
     // We only call the specific patient-report draft here.
     // draftManager.updateDraft is ALREADY handling the master hospital-assessment draft.
     try {
+      const formattedPatients = patientsWithStatus.map(p => ({
+        ...p,
+        patientName: p.name // Enforcing strict naming constraint locally
+      }));
       await api.saveDraft("patient-report", hospitalCode, specialty, {
-        registeredPatients,
+        registeredPatients: formattedPatients,
       });
-      
+
       if (showToast) {
         toast.success("Draft Tersimpan", { description: "Progress Patient Report berhasil diamankan." });
       }
@@ -398,42 +469,92 @@ export function PatientReportPage() {
 
   const handleContinue = async () => {
     // 1. Lock the auto-saver so it doesn't fire concurrently
-    isNavigatingAwayRef.current = true; 
-    
+    isNavigatingAwayRef.current = true;
+
     const draftId = draftManager.getCurrentDraftId();
     if (draftId && specialty) {
-      // 2. This updates local storage AND fires the first cloud save (hospital-assessment)
-      draftManager.updateDraft(draftId, specialty, "patientReport", {
-        score: overallScore,
-        patientCount,
-        completed: true, 
+      const existingDraft = draftManager.getDraftById(draftId);
+      const existingPRM = existingDraft?.progress[specialty]?.patientReport || { data: {}, diseaseScores: {} };
+
+      const mergedScores = {
+        ...((existingPRM as any).diseaseScores || {}),
+        [diseaseSpecialtyKey]: {
+          score: overallScore, // fallback compatibility
+          rawScore: overallScore,
+          nativePatientCount: surveyResponses.length,
+          customPatientCount: customSurveyUploaded ? customSurveyPatientCount : 0,
+          patientCount, // total
+          customSurveyUploaded
+        }
+      };
+
+      let totalWeightedScore = 0;
+      let totalRawScore = 0;
+      let hasAnyCustom = false;
+      specData?.diseases.forEach((_d: any, idx: number) => {
+        const key = `${specialty}-d${idx}`;
+        const w = 0.5; // Hardcoded 50/50 split for disease 1 and 2
+        const dScore = mergedScores[key]?.rawScore !== undefined ? mergedScores[key].rawScore : (mergedScores[key]?.score || 0);
+        const nativePCount = mergedScores[key]?.nativePatientCount || 0;
+        const isCustom = mergedScores[key]?.customSurveyUploaded;
+
+        if (isCustom) hasAnyCustom = true;
+
+        let validityWeight = 0;
+        if (nativePCount <= 0) validityWeight = 0;
+        else if (nativePCount <= 5) validityWeight = 0.80;
+        else if (nativePCount <= 10) validityWeight = 0.85;
+        else if (nativePCount <= 20) validityWeight = 0.92;
+        else validityWeight = 1.0;
+
+        const weightedDScore = Math.round(dScore * validityWeight);
+        if (mergedScores[key]) {
+          mergedScores[key].weightedScore = isCustom ? 0 : weightedDScore;
+        }
+
+        totalWeightedScore += (isCustom ? 0 : weightedDScore) * w;
+        totalRawScore += dScore * w;
       });
+
+      if (hasAnyCustom) {
+        totalWeightedScore = 0;
+      }
+
+      draftManager.updateDraft(draftId, specialty, "patientReport", {
+        data: existingPRM.data,
+        diseaseScores: mergedScores,
+        score: Math.round(totalWeightedScore),
+        patientCount,
+        completed: true,
+      } as any);
+
+      sessionStorage.setItem(`${specialty}_patientReportScore`, Math.round(totalWeightedScore).toString());
+      sessionStorage.setItem(`${specialty}_patientReportRawScore`, Math.round(totalRawScore).toString());
     }
 
     // 3. Give SQLite a tiny 150ms breathing room before firing the second write
     await new Promise(resolve => setTimeout(resolve, 150));
-    
+
     // 4. Fire the second cloud save (patient-report backup)
     await handleSaveDraft(false);
 
-    sessionStorage.setItem(`${specialty}_patientReportScore`, overallScore.toString());
     navigate(`/siap-persi/result/${specialty}`);
   };
 
   const handleIsiNanti = async () => {
     isNavigatingAwayRef.current = true;
-    
+
     // Give SQLite a 150ms buffer in case the useEffect fired right before clicking
     await new Promise(resolve => setTimeout(resolve, 150));
     await handleSaveDraft(false);
-    
+
     navigate(`/siap-persi/result/${specialty}`);
   };
 
   const handleBackToPortal = async () => {
     isNavigatingAwayRef.current = true;
     await handleSaveDraft(false); // Silent save
-    navigate("/hospital-login"); 
+    navigate("/siap-persi/select-specialty");
   };
 
   // Get survey response for a patient (for review)
@@ -462,9 +583,9 @@ export function PatientReportPage() {
 
         {/* Header */}
         <div className="mb-6">
-          <Button 
-            variant="ghost" 
-            onClick={handleBackToPortal} 
+          <Button
+            variant="ghost"
+            onClick={handleBackToPortal}
             className="text-[#0F4C81] hover:text-[#0d3d66] hover:bg-blue-50 px-3 h-9 mb-4 -ml-3 transition-colors"
           >
             <ArrowLeft className="w-4 h-4 mr-2" />
@@ -684,26 +805,26 @@ export function PatientReportPage() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                      Nama Lengkap Pasien <span className="text-red-500">*</span>
+                      Inisial Pasien <span className="text-red-500">*</span>
                     </label>
                     <input
                       type="text"
                       value={newPatientName}
                       onChange={(e) => setNewPatientName(e.target.value)}
-                      placeholder="Contoh: Budi Santoso"
+                      placeholder=""
                       className="w-full h-11 px-4 bg-white border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#0F4C81] focus:border-[#0F4C81]"
                       required
                     />
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                      Nomor Rekam Medis (RM) <span className="text-red-500">*</span>
+                      Kode Pasien <span className="text-red-500">*</span>
                     </label>
                     <input
                       type="text"
                       value={newPatientRM}
                       onChange={(e) => setNewPatientRM(e.target.value)}
-                      placeholder="Contoh: RM-000123"
+                      placeholder=""
                       className="w-full h-11 px-4 bg-white border-2 border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#0F4C81] focus:border-[#0F4C81] font-mono"
                       required
                     />
@@ -941,33 +1062,11 @@ export function PatientReportPage() {
 
         {/* Demo Section */}
         <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-6 mb-6">
-          <h3 className="font-bold text-gray-900 mb-3">Demo: Simulasi Data Pasien - {activeDisease?.diseaseName}</h3>
+          <h3 className="font-bold text-gray-900 mb-3">Reset Data Pasien - {activeDisease?.diseaseName}</h3>
           <p className="text-gray-700 text-sm mb-4">
-            Untuk demo, klik tombol di bawah untuk menambahkan data survei simulasi ke server.
+            Klik tombol di bawah untuk menghapus data pasien survei sebelumnya.
           </p>
           <div className="flex gap-3 flex-wrap">
-            <Button
-              onClick={async () => {
-                const surveys = generateSimulationSurveys(specialty || "", activeDiseaseIndex, 5);
-                await api.bulkAddSurveys(hospitalCode, diseaseSpecialtyKey, surveys);
-                loadResponses();
-              }}
-              variant="outline"
-              className="border-yellow-400 bg-yellow-100 text-yellow-800 hover:bg-yellow-200"
-            >
-              + 5 Pasien Simulasi
-            </Button>
-            <Button
-              onClick={async () => {
-                const surveys = generateSimulationSurveys(specialty || "", activeDiseaseIndex, 30);
-                await api.bulkAddSurveys(hospitalCode, diseaseSpecialtyKey, surveys);
-                loadResponses();
-              }}
-              variant="outline"
-              className="border-yellow-400 bg-yellow-100 text-yellow-800 hover:bg-yellow-200"
-            >
-              + 30 Pasien Simulasi
-            </Button>
             <Button
               onClick={async () => {
                 await api.resetSurveys(hospitalCode, diseaseSpecialtyKey);
@@ -1025,16 +1124,38 @@ export function PatientReportPage() {
                     </tr>
                   </tbody>
                   <tfoot>
+                    {/* 1. Subtotal Skor Raw */}
+                    <tr className="border-t-2 border-gray-200 bg-gray-50/50">
+                      <td className="py-3 px-4 font-semibold text-gray-700" colSpan={3}>Subtotal (Skor Raw)</td>
+                      <td className="py-3 px-4 text-center font-semibold text-gray-700">{overallScore}</td>
+                    </tr>
+
+                    {/* 2. Bobot Validitas (Jumlah Pasien) */}
+                    <tr className="border-b border-gray-200 bg-amber-50/50">
+                      <td className="py-3 px-4 font-medium text-amber-800" colSpan={2}>
+                        Bobot Validitas Sampel ({patientCount} Pasien Selesai)
+                      </td>
+                      <td className="py-3 px-4 text-center font-bold text-amber-800">
+                        x {(getSampleValidityWeight(patientCount) * 100).toFixed(0)}%
+                      </td>
+                      <td className="py-3 px-4 text-center text-amber-800/50">
+                        -
+                      </td>
+                    </tr>
+
+                    {/* 3. Final Total */}
                     <tr className="bg-[#0F4C81]/10">
-                      <td className="py-3 px-4 font-bold text-[#0F4C81] text-lg" colSpan={3}>Total PRM</td>
-                      <td className="py-3 px-4 text-center font-bold text-[#0F4C81] text-2xl">{overallScore}</td>
+                      <td className="py-3 px-4 font-bold text-[#0F4C81] text-lg" colSpan={3}>Skor Akhir PRM</td>
+                      <td className="py-3 px-4 text-center font-bold text-[#0F4C81] text-2xl">
+                        {Math.round(overallScore * getSampleValidityWeight(patientCount))}
+                      </td>
                     </tr>
                   </tfoot>
                 </table>
               </div>
 
               <div className="bg-gray-50 rounded-lg p-3 text-xs text-gray-600">
-                <p><strong>Rumus:</strong> Total PRM = (PREM x 60%) + (PROM x 40%)</p>
+                <p><strong>Rumus:</strong> Skor Akhir = ((PREM x 60%) + (PROM x 40%)) × Bobot Validitas</p>
                 <p className="mt-1">Berdasarkan {patientCount} survei pasien {activeDisease?.diseaseName} yang telah terkumpul.</p>
               </div>
             </>
@@ -1070,7 +1191,7 @@ export function PatientReportPage() {
           >
             {patientCount < 1
               ? `Daftarkan minimal 1 pasien untuk melanjutkan`
-              : `Lanjut ke Hasil Akhir (Skor: ${overallScore})`}
+              : `Lanjut ke Hasil Akhir (Skor: ${Math.round(overallScore * getSampleValidityWeight(patientCount))})`}
             <ChevronRight className="w-5 h-5 ml-2" />
           </Button>
         </div>
@@ -1103,6 +1224,47 @@ export function PatientReportPage() {
           diseaseIndex={activeDiseaseIndex}
           onClose={() => setShowReviewModal(null)}
         />
+      )}
+
+      {/* Patient Count Input Dialog */}
+      {showInputPatientsDialog && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/20 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white border border-gray-100 shadow-2xl rounded-xl p-6 w-full max-w-sm transform transition-all animate-in zoom-in-95 duration-200">
+            <h3 className="font-semibold text-gray-900">Jumlah Pasien</h3>
+            <p className="text-sm text-gray-500 mt-1 mb-4">
+              Masukkan jumlah pasien yang dievaluasi dalam dokumen survei mandiri ini.
+              Kosongkan atau isi <strong>0</strong> jika tidak tahu atau ingin menggunakan kombinasi dengan QR Code.
+            </p>
+            <input
+              type="number"
+              min="0"
+              max="30"
+              value={patientCountInput}
+              onChange={(e) => setPatientCountInput(e.target.value)}
+              placeholder="Contoh: 30"
+              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#0F4C81]/20 focus:border-[#0F4C81] transition-all"
+              autoFocus
+            />
+            <div className="flex justify-end gap-2 mt-6">
+              <button
+                onClick={() => {
+                  pendingUploadDocRef.current = null;
+                  setShowInputPatientsDialog(false);
+                  setPatientCountInput("");
+                }}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors focus:outline-none"
+              >
+                Batal
+              </button>
+              <button
+                onClick={handleSavePatientCount}
+                className="px-4 py-2 text-sm font-medium text-white bg-[#0F4C81] rounded-lg hover:bg-[#0d3d66] transition-colors focus:outline-none focus:ring-2 focus:ring-[#0F4C81]/50"
+              >
+                Simpan Data
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -1360,10 +1522,12 @@ function PatientQRModal({
         <p className="text-gray-500 mb-1 text-sm">{hospitalName} - {specialtyName}</p>
         <p className="text-xs text-teal-600 font-medium mb-3">{diseaseName}</p>
 
-        <div className="inline-flex items-center gap-2 bg-blue-50 border border-blue-200 rounded-full px-4 py-2 mb-5">
-          <span className="font-semibold text-gray-900 text-sm">{patient.name}</span>
-          <span className="text-gray-400">|</span>
-          <span className="text-gray-600 text-sm font-mono">{patient.rm}</span>
+        <div className="flex justify-center mb-5">
+          <div className="inline-flex items-center gap-2 bg-blue-50 border border-blue-200 rounded-full px-4 py-2">
+            <span className="font-semibold text-gray-900 text-sm">{patient.name}</span>
+            <span className="text-gray-400">|</span>
+            <span className="text-gray-600 text-sm font-mono">{patient.rm}</span>
+          </div>
         </div>
 
         <div className="inline-block bg-white rounded-2xl border-4 border-[#0F4C81] p-5 mb-5">
@@ -1404,56 +1568,4 @@ function PatientQRModal({
       </div>
     </div>
   );
-}
-
-// ===== Simulation Helper =====
-function generateSimulationSurveys(specialty: string, diseaseIndex: number, count: number): PatientSurveyResponse[] {
-  const scoreMap: Record<string, number> = { puas: 100, cukup: 50, kurang: 0 };
-
-  const firstNames = ["Budi", "Siti", "Agus", "Dewi", "Andi", "Rina", "Joko", "Sri", "Heru", "Yuni", "Dimas", "Putri", "Wahyu", "Lina", "Rudi"];
-  const lastNames = ["Santoso", "Wibowo", "Kusuma", "Hartono", "Sari", "Purnama", "Wijaya", "Rahayu", "Pratama", "Andini", "Hidayat", "Utami"];
-
-  const specData = specialtyAuditData[specialty as keyof typeof specialtyAuditData];
-  const disease = specData?.diseases[diseaseIndex];
-  const premQIds = disease?.premQuestions?.map(q => q.id) || ["prem-1", "prem-2", "prem-3", "prem-4"];
-  const promQIds = disease?.promQuestions?.map(q => q.id) || ["prom-1", "prom-2", "prom-3"];
-
-  const surveys: PatientSurveyResponse[] = [];
-
-  for (let i = 0; i < count; i++) {
-    const answers: Record<string, string> = {};
-
-    const weightedRandom = () => {
-      const r = Math.random();
-      if (r < 0.5) return "puas";
-      if (r < 0.8) return "cukup";
-      return "kurang";
-    };
-
-    premQIds.forEach(id => { answers[id] = weightedRandom(); });
-    promQIds.forEach(id => { answers[id] = weightedRandom(); });
-
-    const premScores = premQIds.map(id => scoreMap[answers[id]]);
-    const promScores = promQIds.map(id => scoreMap[answers[id]]);
-    const premAvg = Math.round(premScores.reduce((a, b) => a + b, 0) / premScores.length);
-    const promAvg = Math.round(promScores.reduce((a, b) => a + b, 0) / promScores.length);
-    const overall = Math.round(premAvg * 0.6 + promAvg * 0.4);
-
-    const firstName = firstNames[Math.floor(Math.random() * firstNames.length)];
-    const lastName = lastNames[Math.floor(Math.random() * lastNames.length)];
-
-    surveys.push({
-      id: "sim-" + Date.now() + "-" + Math.random().toString(36).substr(2, 9),
-      patientName: firstName + " " + lastName,
-      medicalRecordNumber: "RM-" + String(i + 1).padStart(6, "0"),
-      specialty,
-      answers,
-      premScore: premAvg,
-      promScore: promAvg,
-      overallScore: overall,
-      submittedAt: new Date(Date.now() - Math.random() * 86400000 * 7).toISOString(),
-    });
-  }
-
-  return surveys;
 }

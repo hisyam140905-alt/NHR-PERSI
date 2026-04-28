@@ -8,7 +8,7 @@ import {
   ArrowLeft,
   FileText,
   ExternalLink,
-  Clock, X 
+  Clock, X
 } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { Textarea } from "../components/ui/textarea";
@@ -37,6 +37,18 @@ export function SiapAdminReviewPage() {
 
   const [viewPdfUrl, setViewPdfUrl] = useState<string | null>(null);
   const [viewPdfName, setViewPdfName] = useState("");
+  const [adminCustomScores, setAdminCustomScores] = useState<Record<string, number | ''>>(() => {
+    try {
+      const cached = localStorage.getItem(`admin_custom_grades_${id}`);
+      return cached !== null ? JSON.parse(cached) : {};
+    } catch {
+      return {};
+    }
+  });
+
+  useEffect(() => {
+    localStorage.setItem(`admin_custom_grades_${id}`, JSON.stringify(adminCustomScores));
+  }, [adminCustomScores, id]);
 
   const createPdfBlobUrl = (base64Data: string) => {
     try {
@@ -85,7 +97,7 @@ export function SiapAdminReviewPage() {
     details: {}
   };
 
- // Load custom survey PDFs - "ERA-BASED" TIME BOUNDING
+  // Load custom survey PDFs - "ERA-BASED" TIME BOUNDING
   useEffect(() => {
     const safeHospitalName = submissionData.hospitalName || (submissionData as any).hospital_name;
     if (!safeHospitalName || safeHospitalName === "Memuat...") return;
@@ -102,8 +114,8 @@ export function SiapAdminReviewPage() {
             const parsed = JSON.parse(raw);
             const docHospitalName = parsed.hospitalName || parsed.realHospitalName;
             const isHospitalMatch = docHospitalName?.toLowerCase() === safeHospitalName?.toLowerCase();
-            const isSpecialtyMatch = 
-              parsed.specialty === submissionData.specialty || 
+            const isSpecialtyMatch =
+              parsed.specialty === submissionData.specialty ||
               parsed.specialty === submissionData.specialtyKey;
 
             if (isHospitalMatch && isSpecialtyMatch) {
@@ -120,15 +132,15 @@ export function SiapAdminReviewPage() {
     // --- 2. NARROW DOWN TO EXACT SUBMISSION ERA ---
     // Helper function to safely parse SQLite dates across all browsers
     const parseSafeDate = (rawDate: any) => {
-       if (!rawDate || rawDate === "—") return 0;
-       const safeStr = typeof rawDate === "string" ? rawDate.replace(" ", "T") : rawDate;
-       const time = new Date(safeStr).getTime();
-       return isNaN(time) ? 0 : time;
+      if (!rawDate || rawDate === "—") return 0;
+      const safeStr = typeof rawDate === "string" ? rawDate.replace(" ", "T") : rawDate;
+      const time = new Date(safeStr).getTime();
+      return isNaN(time) ? 0 : time;
     };
 
     // Group and sort all submissions for THIS hospital & specialty chronologically
     const hospitalSubmissions = submissions
-      .filter(s => 
+      .filter(s =>
         (s.hospitalName === safeHospitalName || (s as any).hospital_name === safeHospitalName) &&
         (s.specialty === submissionData.specialty || s.specialty === submissionData.specialtyKey)
       )
@@ -150,35 +162,107 @@ export function SiapAdminReviewPage() {
 
     // A. Filter PDFs that strictly fall into this submission's era
     const validDocs = allMatchingDocs.filter(doc => {
-       const uploadTime = new Date(doc.uploadedAt).getTime();
-       return uploadTime > startTime && uploadTime <= endTime; 
+      const uploadTime = new Date(doc.uploadedAt).getTime();
+      return uploadTime > startTime && uploadTime <= endTime;
     });
 
     // B. Group by Disease Tab and pick the SINGLE most recent valid PDF from this era
     const latestDocsPerDisease = new Map<string, CustomSurveyDoc>();
     validDocs.forEach(doc => {
-       const existing = latestDocsPerDisease.get(doc.diseaseName);
-       if (!existing || new Date(doc.uploadedAt).getTime() > new Date(existing.uploadedAt).getTime()) {
-           latestDocsPerDisease.set(doc.diseaseName, doc);
-       }
+      const existing = latestDocsPerDisease.get(doc.diseaseName);
+      if (!existing || new Date(doc.uploadedAt).getTime() > new Date(existing.uploadedAt).getTime()) {
+        latestDocsPerDisease.set(doc.diseaseName, doc);
+      }
     });
 
     setCustomSurveyDocs(Array.from(latestDocsPerDisease.values()));
-    
-  // Added 'submissions' to dependency array so it can accurately calculate the era
+
+    // Added 'submissions' to dependency array so it can accurately calculate the era
   }, [
     submissions,
     submissionData.id,
-    submissionData.hospitalName, 
-    submissionData.specialty, 
-    submissionData.specialtyKey, 
+    submissionData.hospitalName,
+    submissionData.specialty,
+    submissionData.specialtyKey,
     (submissionData as any).hospital_name
   ]);
 
-// Add these safe fallbacks right after submissionData is defined
+  // Add these safe fallbacks right after submissionData is defined
   const safeRsbk = Number(submissionData.scores.rsbk || (submissionData.scores as any).rsbkScore || 0);
   const safeAudit = Number(submissionData.scores.clinicalAudit || (submissionData.scores as any).audit || (submissionData.scores as any).auditScore || 0);
-  const safePrm = Number(submissionData.scores.patientReport || (submissionData.scores as any).prm || (submissionData.scores as any).prmScore || 0);
+  const originalPrmScore = Number(submissionData.scores.patientReport || (submissionData.scores as any).prm || (submissionData.scores as any).prmScore || 0);
+
+  let safePrm = originalPrmScore;
+  const specData = specialtyAuditData[(submissionData as any).specialtyKey] || specialtyAuditData.cardiology;
+  const prmDiseaseScores = (submissionData.details as any)?.prmData?.diseaseScores;
+
+  if (prmDiseaseScores) {
+    let totalScore = 0;
+    let hasUngradedCustom = false;
+    specData.diseases.forEach((_d, idx) => {
+      const weight = 0.5; // Hardcoded 50/50 split for disease 1 and 2
+      const dKey = `${(submissionData as any).specialtyKey}-d${idx}`;
+      const dScores = prmDiseaseScores[dKey] || {};
+      const rawNativeScore = dScores.rawScore !== undefined ? dScores.rawScore : (dScores.score || 0);
+      const initialWeightedScore = dScores.weightedScore !== undefined ? dScores.weightedScore : (dScores.score || 0);
+      const adminScore = adminCustomScores[dKey];
+
+      const nativePatientCount = dScores.nativePatientCount || 0;
+      const customPatientCount = dScores.customPatientCount || 0;
+      const totalPCount = dScores.patientCount || (nativePatientCount + customPatientCount);
+
+      let finalDiseaseScore = initialWeightedScore;
+
+      if (dScores.customSurveyUploaded) {
+        if (adminScore !== undefined && adminScore !== '') {
+          const totalNativeScore = rawNativeScore * nativePatientCount;
+          const totalCustomScore = Number(adminScore) * customPatientCount;
+
+          let hybridRawScore = 0;
+          if (totalPCount > 0) {
+            hybridRawScore = (totalNativeScore + totalCustomScore) / totalPCount;
+          } else {
+            hybridRawScore = Number(adminScore);
+          }
+
+          let validityWeight = 0;
+          if (totalPCount <= 0) validityWeight = 0;
+          else if (totalPCount <= 5) validityWeight = 0.80;
+          else if (totalPCount <= 10) validityWeight = 0.85;
+          else if (totalPCount <= 20) validityWeight = 0.92;
+          else validityWeight = 1.0;
+
+          finalDiseaseScore = Math.round(hybridRawScore * validityWeight);
+        } else {
+          hasUngradedCustom = true;
+          finalDiseaseScore = 0;
+        }
+      }
+
+      totalScore += finalDiseaseScore * weight;
+    });
+
+    if (hasUngradedCustom) {
+      safePrm = 0;
+    } else {
+      safePrm = Math.round(totalScore);
+    }
+  } else {
+    // Old fallback
+    if (customSurveyDocs.length > 0 && adminCustomScores['legacy'] !== undefined && adminCustomScores['legacy'] !== '') {
+      const adminScore = Number(adminCustomScores['legacy']);
+      if (originalPrmScore === 0) {
+        safePrm = adminScore;
+      } else {
+        safePrm = Math.round((originalPrmScore + adminScore) / 2);
+      }
+    }
+  }
+
+  let finalScore = Number(submissionData.scores.final || 0);
+  if (Object.keys(adminCustomScores).length > 0 || safePrm !== originalPrmScore) {
+    finalScore = Number((safeRsbk * 0.15 + safeAudit * 0.60 + safePrm * 0.25).toFixed(2));
+  }
 
   const radarData = [
     { category: "Hospital Structure", value: safeRsbk },
@@ -194,7 +278,7 @@ export function SiapAdminReviewPage() {
     return { grade: "Tier 5", name: "Developing", color: "text-slate-600", bg: "bg-gray-100" };
   };
 
-  const gradeInfo = getTier(submissionData.scores.final as number);
+  const gradeInfo = getTier(finalScore);
 
   const handleAction = (actionType: "approve" | "reject") => {
     setAction(actionType);
@@ -203,9 +287,17 @@ export function SiapAdminReviewPage() {
 
   const confirmAction = async () => {
     if (action === "approve") {
-      await approveSubmission(submissionData);
+      const overrideSubmission = {
+        ...submissionData,
+        scores: {
+          ...submissionData.scores,
+          prm: safePrm,
+          final: finalScore
+        }
+      };
+      await approveSubmission(overrideSubmission, comment);
     } else if (action === "reject") {
-      await rejectSubmission(submissionData.id);
+      await rejectSubmission(submissionData.id, comment);
     }
     console.log(`${action} submission with comment:`, comment);
     setShowApprovalDialog(false);
@@ -281,7 +373,7 @@ export function SiapAdminReviewPage() {
                 <h3 className="text-xl font-bold">Final Score</h3>
               </div>
               <div className="flex items-baseline gap-3">
-                <span className="text-6xl font-bold">{submissionData.scores.final as number}</span>
+                <span className="text-6xl font-bold">{finalScore}</span>
                 <div className={`${gradeInfo.bg} rounded-xl px-4 py-2 text-center`}>
                   <div className={`text-3xl font-bold ${gradeInfo.color}`}>
                     {gradeInfo.grade}
@@ -498,15 +590,76 @@ export function SiapAdminReviewPage() {
             <p className="text-gray-500 text-sm mb-6 font-medium">Hasil evaluasi kepatuhan protokol klinis per item pertanyaan.</p>
 
             <div className="grid gap-3">
-              <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg">
-                 <p className="text-amber-700 text-sm font-semibold">Data rincian audit klinis tidak tersedia.</p>
-                 <p className="text-amber-600 text-xs mt-1">Detail evaluasi per rekam medis pasien disimpan secara internal oleh rumah sakit (Privasi Data Medis).</p>
-              </div>
+              {(() => {
+                const specData = specialtyAuditData[(submissionData as any).specialtyKey] || specialtyAuditData.cardiology;
+                const auditData: Record<string, string> = (submissionData.details as any)?.auditData || {};
+
+                const getOptionScore = (value: string) => {
+                  if (value === "sesuai") return 1;
+                  if (value === "tidak-sesuai-pengecualian") return 1;
+                  return 0;
+                };
+
+                return specData.diseases.map((disease, dIdx) => {
+                  const patientRows = [];
+                  for (let p = 1; p <= 30; p++) {
+                    let hasAnyData = false;
+                    const categories: Record<string, { total: number; count: number }> = {};
+
+                    disease.questions.forEach(q => {
+                      const key = `${p}-${q.id}`;
+                      if (auditData[key]) {
+                        hasAnyData = true;
+                        const catName = q.category.replace(/\s*\(\d+%\)/, "");
+                        if (!categories[catName]) categories[catName] = { total: 0, count: 0 };
+                        categories[catName].total += getOptionScore(auditData[key]);
+                        categories[catName].count++;
+                      }
+                    });
+
+                    if (hasAnyData) {
+                      const breakdownLabels = Object.entries(categories).map(([name, data]) => {
+                        const pct = Math.round((data.total / data.count) * 100);
+                        return `${name}: ${pct}%`;
+                      }).join(" | ");
+
+                      patientRows.push(
+                        <div key={p} className="flex items-center justify-between p-4 bg-gray-50/50 hover:bg-white border border-gray-100 hover:border-indigo-100 hover:shadow-sm rounded-xl transition-all">
+                          <div className="flex flex-col gap-1">
+                            <span className="text-sm font-bold text-gray-800">Pasien {p}</span>
+                            <span className="text-xs text-indigo-500 font-medium">Skor Kategori</span>
+                          </div>
+                          <div className="flex items-center gap-3 text-right">
+                            <span className="text-sm font-black text-indigo-700 bg-indigo-50 px-4 py-1.5 rounded-lg border border-indigo-100">{breakdownLabels}</span>
+                          </div>
+                        </div>
+                      );
+                    }
+                  }
+
+                  return (
+                    <div key={dIdx} className="mb-6 last:mb-0">
+                      <h4 className="font-extrabold text-indigo-800 flex items-center gap-2 text-lg mb-3">
+                        <CheckCircle2 className="w-5 h-5" />
+                        {disease.diseaseName}
+                      </h4>
+                      <div className="grid gap-3">
+                        {patientRows.length > 0 ? patientRows : (
+                          <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg">
+                            <p className="text-amber-700 text-sm font-semibold">Data rincian audit klinis belum tersedia untuk {disease.diseaseName}.</p>
+                            <p className="text-amber-600 text-xs mt-1">Detail dievaluasi dari rekam medis pasien.</p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                });
+              })()}
             </div>
           </div>
         )}
 
-       {/* --- TAB CONTENT: PATIENT REPORT (PRM) --- */}
+        {/* --- TAB CONTENT: PATIENT REPORT (PRM) --- */}
         {activeTab === "prm" && (
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 mb-8">
             <div className="bg-white rounded-xl border border-gray-200 p-8 shadow-sm">
@@ -514,31 +667,70 @@ export function SiapAdminReviewPage() {
               <p className="text-gray-500 text-sm mb-8 font-medium">Laporan feedback kuesioner pengalaman dan hasil klinis pasien.</p>
 
               <div className="space-y-10">
-                {/* PREM Section */}
+                {/* PREM & PROM Breakdowns Combined */}
                 <div>
-                  <h4 className="font-extrabold text-blue-600 mb-5 flex items-center gap-2 text-lg">
+                  <h4 className="font-extrabold text-[#0F4C81] mb-5 flex items-center gap-2 text-lg">
                     <CheckCircle2 className="w-5 h-5" />
-                    Patient Experience (PREM)
+                    PREM & PROM Per-Patient Breakdown
                   </h4>
                   <div className="grid gap-3">
-                    <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg">
-                       <p className="text-amber-700 text-sm font-semibold">Data survei PREM tidak tersedia.</p>
-                       <p className="text-amber-600 text-xs mt-1">Rincian kuesioner pengalaman pasien dilindungi untuk menjaga kerahasiaan responden.</p>
-                    </div>
-                  </div>
-                </div>
+                    {(() => {
+                      const specData = specialtyAuditData[(submissionData as any).specialtyKey] || specialtyAuditData.cardiology;
+                      const prmData = (submissionData.details as any)?.prmData || {};
 
-                {/* PROM Section */}
-                <div>
-                  <h4 className="font-extrabold text-emerald-600 mb-5 flex items-center gap-2 text-lg">
-                    <CheckCircle2 className="w-5 h-5" />
-                    Patient Outcome (PROM)
-                  </h4>
-                  <div className="grid gap-3">
-                    <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg">
-                       <p className="text-amber-700 text-sm font-semibold">Data survei PROM tidak tersedia.</p>
-                       <p className="text-amber-600 text-xs mt-1">Rincian hasil klinis pasien dilindungi untuk menjaga kerahasiaan responden.</p>
-                    </div>
+                      return specData.diseases.map((disease, dIdx) => {
+                        const dKey = `${(submissionData as any).specialtyKey}-d${dIdx}`;
+                        const diseasePrm = prmData[dKey] || {};
+
+                        let registeredPatients = diseasePrm.registeredPatients;
+                        if (!registeredPatients && prmData.registeredPatients && dIdx === 0) {
+                          registeredPatients = prmData.registeredPatients;
+                        }
+                        registeredPatients = registeredPatients || [];
+
+                        return (
+                          <div key={dIdx} className="mb-6 last:mb-0">
+                            <h5 className="font-extrabold text-teal-800 flex items-center gap-2 text-md mb-3">
+                              {disease.diseaseName}
+                            </h5>
+                            <div className="grid gap-3">
+                              {registeredPatients.length === 0 ? (
+                                <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg">
+                                  <p className="text-amber-700 text-sm font-semibold">Data survei pasien tidak/belum tersedia untuk {disease.diseaseName}.</p>
+                                  <p className="text-amber-600 text-xs mt-1">Hanya skor mandiri dari dokumen yang mungkin tersedia di bawah.</p>
+                                </div>
+                              ) : (
+                                registeredPatients.map((patient: any, i: number) => {
+                                  const safePatientName = patient.patientName || patient.name || `Pasien ${i + 1}`;
+                                  const hasSurvey = patient.surveyed;
+                                  const response = patient.surveyResponse;
+
+                                  return (
+                                    <div key={patient.id || i} className="flex items-center justify-between p-4 bg-gray-50/50 hover:bg-white border border-gray-100 hover:border-teal-100 hover:shadow-sm rounded-xl transition-all">
+                                      <div className="flex flex-col gap-1">
+                                        <span className="text-sm font-bold text-gray-800">{safePatientName}</span>
+                                        <span className="text-xs text-gray-400 font-mono">RM: ***{String(patient.rm || '').slice(-3)}</span>
+                                      </div>
+                                      <div className="flex items-center gap-3 text-right">
+                                        {hasSurvey && response ? (
+                                          <span className="text-sm font-black text-teal-700 bg-teal-50 px-4 py-1.5 rounded-lg border border-teal-100">
+                                            PREM: {response.premScore}% | PROM: {response.promScore}%
+                                          </span>
+                                        ) : hasSurvey ? (
+                                          <span className="text-xs font-semibold text-green-700 bg-green-100 px-3 py-1 rounded-md">Tersubmit (Skor Tersembunyi)</span>
+                                        ) : (
+                                          <span className="text-xs font-semibold text-yellow-700 bg-yellow-100 px-3 py-1 rounded-md">Menunggu</span>
+                                        )}
+                                      </div>
+                                    </div>
+                                  );
+                                })
+                              )}
+                            </div>
+                          </div>
+                        );
+                      });
+                    })()}
                   </div>
                 </div>
               </div>
@@ -607,52 +799,100 @@ export function SiapAdminReviewPage() {
                       </div>
                     </div>
                   ))}
-                </div>
-              )}
-               {/* ✅ TAMBAHKAN MODAL PDF VIEWER DI SINI */}
-        {viewPdfUrl && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-6"
-            onClick={() => {
-              if (viewPdfUrl) URL.revokeObjectURL(viewPdfUrl);
-              setViewPdfUrl(null);
-            }}>
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
-              <div className="flex items-center justify-between p-5 border-b border-gray-200">
-                <div className="flex items-center gap-3">
-                  <FileText className="w-5 h-5 text-indigo-600" />
-                  <div>
-                    <h3 className="font-[700] text-gray-900">Dokumen Survei Mandiri</h3>
-                    <p className="text-xs text-gray-500">{viewPdfName}</p>
-                  </div>
-                </div>
 
-                <div className="flex items-center gap-3">
-                  {/* Fallback Download */}
-                  <a
-                    href={viewPdfUrl}
-                    download={viewPdfName || "Survei_Mandiri.pdf"}
-                    className="px-4 py-1.5 bg-indigo-50 text-indigo-700 text-sm font-[600] rounded-lg hover:bg-indigo-100 transition-colors"
-                  >
-                    Download PDF
-                  </a>
-                  <button onClick={() => {
-                    if (viewPdfUrl) URL.revokeObjectURL(viewPdfUrl);
-                    setViewPdfUrl(null);
-                  }} className="p-2 rounded-full hover:bg-gray-100">
-                    <X className="w-5 h-5 text-gray-500" />
-                  </button>
-                </div>
-              </div>
-              <div className="flex-1 p-2">
-                <iframe
-                  src={viewPdfUrl}
-                  className="w-full h-full rounded-lg border border-gray-200"
-                  title="Survei Mandiri PDF"
-                />
-                       </div>
+                  {/* --- SURVEI MANDIRI ADMIN GRADING INPUT --- */}
+                  <div className="mt-6 p-5 bg-[#0F4C81]/5 border border-[#0F4C81]/20 rounded-xl">
+                    <h4 className="font-bold text-[#0F4C81] mb-2 text-sm flex items-center gap-2">
+                      <Trophy className="w-4 h-4" /> Admin Grading: Survei Mandiri
+                    </h4>
+                    <p className="text-xs text-gray-600 mb-4">
+                      Berdasarkan evaluasi dokumen PDF Survei Mandiri di atas, masukkan nilai Survei (0-100). Nilai ini akan menggantikan PREMPROM (jika belum ada) atau dirata-rata dengan skor standar yang sudah masuk.
+                    </p>
+                    <div className="grid gap-4">
+                      {(() => {
+                        const specData = specialtyAuditData[(submissionData as any).specialtyKey] || specialtyAuditData.cardiology;
+                        return specData.diseases.map((disease, idx) => {
+                          const dKey = `${(submissionData as any).specialtyKey}-d${idx}`;
+                          const dScores = prmDiseaseScores?.[dKey] || {};
+                          if (!dScores.customSurveyUploaded) return null;
+
+                          const val = adminCustomScores[dKey] !== undefined ? adminCustomScores[dKey] : '';
+                          return (
+                            <div key={dKey} className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
+                              <span className="font-semibold text-gray-700 min-w-[150px]">{disease.diseaseName}</span>
+                              <div className="relative">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  max="100"
+                                  value={val}
+                                  onChange={(e) => {
+                                    const newVal = e.target.value === '' ? '' : Number(e.target.value);
+                                    setAdminCustomScores(prev => ({ ...prev, [dKey]: newVal }));
+                                  }}
+                                  className="pl-4 pr-8 py-2 w-32 border-2 border-indigo-200 rounded-lg text-lg font-bold text-indigo-700 bg-white focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors"
+                                  placeholder="0-100"
+                                />
+                                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-indigo-400 font-bold">%</span>
+                              </div>
+                              {val !== '' && (
+                                <span className="inline-flex items-center text-xs font-semibold px-3 py-1.5 bg-green-100 text-green-700 rounded-lg shadow-sm border border-green-200">
+                                  <CheckCircle2 className="w-4 h-4 mr-1.5" />
+                                  Tersimpan
+                                </span>
+                              )}
+                            </div>
+                          );
+                        });
+                      })()}
                     </div>
                   </div>
-                 )}
+                </div>
+              )}
+              {/* ✅ TAMBAHKAN MODAL PDF VIEWER DI SINI */}
+              {viewPdfUrl && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-6"
+                  onClick={() => {
+                    if (viewPdfUrl) URL.revokeObjectURL(viewPdfUrl);
+                    setViewPdfUrl(null);
+                  }}>
+                  <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+                    <div className="flex items-center justify-between p-5 border-b border-gray-200">
+                      <div className="flex items-center gap-3">
+                        <FileText className="w-5 h-5 text-indigo-600" />
+                        <div>
+                          <h3 className="font-[700] text-gray-900">Dokumen Survei Mandiri</h3>
+                          <p className="text-xs text-gray-500">{viewPdfName}</p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-3">
+                        {/* Fallback Download */}
+                        <a
+                          href={viewPdfUrl}
+                          download={viewPdfName || "Survei_Mandiri.pdf"}
+                          className="px-4 py-1.5 bg-indigo-50 text-indigo-700 text-sm font-[600] rounded-lg hover:bg-indigo-100 transition-colors"
+                        >
+                          Download PDF
+                        </a>
+                        <button onClick={() => {
+                          if (viewPdfUrl) URL.revokeObjectURL(viewPdfUrl);
+                          setViewPdfUrl(null);
+                        }} className="p-2 rounded-full hover:bg-gray-100">
+                          <X className="w-5 h-5 text-gray-500" />
+                        </button>
+                      </div>
+                    </div>
+                    <div className="flex-1 p-2">
+                      <iframe
+                        src={viewPdfUrl}
+                        className="w-full h-full rounded-lg border border-gray-200"
+                        title="Survei Mandiri PDF"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}

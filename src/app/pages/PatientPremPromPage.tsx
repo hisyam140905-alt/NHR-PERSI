@@ -221,13 +221,13 @@ export function PatientPremPromPage() {
           <h3 className="font-bold text-gray-900 mb-4">Data Pasien</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Nama Lengkap</label>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Inisial Pasien</label>
               <div className="h-11 px-4 bg-gray-50 border-2 border-gray-200 rounded-lg flex items-center text-gray-900 font-medium">
                 {qName}
               </div>
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Nomor Rekam Medis</label>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Kode Rekam Medis</label>
               <div className="h-11 px-4 bg-gray-50 border-2 border-gray-200 rounded-lg flex items-center text-gray-900 font-medium font-mono">
                 {qRm}
               </div>
@@ -251,15 +251,18 @@ export function PatientPremPromPage() {
             {ratingOptions.map((opt) => (
               <div
                 key={opt.value}
-                className={`rounded-xl p-3 md:p-4 text-center border-2 ${
-                  opt.color === "green" ? "bg-green-50 border-green-200" :
+                className={`rounded-xl p-3 md:p-4 text-center border-2 ${opt.color === "green" ? "bg-green-50 border-green-200" :
                   opt.color === "teal" ? "bg-teal-50 border-teal-200" :
-                  opt.color === "yellow" ? "bg-yellow-50 border-yellow-200" :
-                  opt.color === "orange" ? "bg-orange-50 border-orange-200" :
-                  "bg-red-50 border-red-200"
-                }`}
+                    opt.color === "yellow" ? "bg-yellow-50 border-yellow-200" :
+                      opt.color === "orange" ? "bg-orange-50 border-orange-200" :
+                        "bg-red-50 border-red-200"
+                  }`}
               >
-                <div className="text-2xl md:text-3xl mb-0.5">{opt.emoji}</div>
+                <div className="flex flex-wrap justify-start md:justify-center text-lg md:text-xl">
+                  {Array.from(opt.emoji).map((star, index) => (
+                    <span key={index}>{star}</span>
+                  ))}
+                </div>
                 <div className="font-bold text-gray-800 text-sm md:text-base">{opt.label}</div>
                 <div className="text-xs text-gray-500 mt-1">{opt.score} poin</div>
               </div>
@@ -386,11 +389,14 @@ function SurveyQuestion({
                 <button
                   key={opt.value}
                   onClick={() => onChange(opt.value)}
-                  className={`p-3 md:py-3 md:px-2 rounded-xl border-2 flex items-center md:flex-col md:justify-center gap-3 md:gap-1 transition-all text-left md:text-center ${
-                    isSelected ? colors.selected : `border-gray-200 ${colors.hover}`
-                  }`}
+                  className={`p-3 md:py-3 md:px-2 rounded-xl border-2 flex items-center md:flex-col md:justify-center gap-3 md:gap-1 transition-all text-left md:text-center ${isSelected ? colors.selected : `border-gray-200 ${colors.hover}`
+                    }`}
                 >
-                  <div className="text-xl md:text-2xl">{opt.emoji}</div>
+                  <div className="flex flex-wrap justify-start md:justify-center text-lg md:text-xl">
+                    {Array.from(opt.emoji).map((star, index) => (
+                      <span key={index}>{star}</span>
+                    ))}
+                  </div>
                   <div className={`text-sm font-semibold flex-1 md:flex-none ${isSelected ? "text-gray-900" : "text-gray-600"}`}>
                     {opt.label}
                   </div>

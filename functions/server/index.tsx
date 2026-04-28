@@ -175,6 +175,7 @@ async function initDb() {
       rsbkScore REAL DEFAULT 0,
       auditScore REAL DEFAULT 0,
       prmScore REAL DEFAULT 0,
+      prm_raw_score REAL DEFAULT 0,
       final_score REAL DEFAULT 0,
       created_at TEXT DEFAULT (datetime('now')),
       data TEXT DEFAULT '{}'
@@ -191,6 +192,7 @@ async function initDb() {
       rsbk_score REAL DEFAULT 0,
       clinical_audit_score REAL DEFAULT 0,
       patient_report_score REAL DEFAULT 0,
+      prm_raw_score REAL DEFAULT 0,
       grade TEXT DEFAULT 'C',
       approved_at TEXT DEFAULT (datetime('now'))
     )`,
@@ -235,6 +237,12 @@ async function initDb() {
     "ALTER TABLE surveys ADD COLUMN hospitalCode TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE surveys ADD COLUMN hospital_code TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE patients ADD COLUMN hospitalCode TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE submissions ADD COLUMN prm_raw_score REAL DEFAULT 0",
+    "ALTER TABLE rankings ADD COLUMN prm_raw_score REAL DEFAULT 0",
+    "ALTER TABLE submissions ADD COLUMN adminNotes TEXT DEFAULT ''",
+    // Soft-delete lifecycle columns
+    "ALTER TABLE submissions ADD COLUMN deleted_at TEXT DEFAULT NULL",
+    "ALTER TABLE rankings ADD COLUMN deleted_at TEXT DEFAULT NULL",
   ];
   for (const sql of migrations) {
     try {
@@ -242,6 +250,17 @@ async function initDb() {
     } catch (_) {
       // Column already exists — safe to ignore
     }
+  }
+
+  // Auto-purge: permanently remove records soft-deleted more than 30 days ago
+  try {
+    const purgedSubs = await db.execute("DELETE FROM submissions WHERE deleted_at IS NOT NULL AND deleted_at < datetime('now', '-30 days')");
+    const purgedRank = await db.execute("DELETE FROM rankings WHERE deleted_at IS NOT NULL AND deleted_at < datetime('now', '-30 days')");
+    if ((purgedSubs.rowsAffected || 0) > 0 || (purgedRank.rowsAffected || 0) > 0) {
+      console.log(`🗑️ Auto-purge: removed ${purgedSubs.rowsAffected} submissions, ${purgedRank.rowsAffected} rankings older than 30 days.`);
+    }
+  } catch (err) {
+    console.error("Auto-purge error (non-fatal):", err);
   }
 
   console.log("✅ Database tables initialized.");
@@ -379,18 +398,39 @@ app.post("/make-server-5e1d66c4/admin/hospitals/approve", async (c: Context) => 
   }
 });
 
-// --- REJECT A HOSPITAL (HARD DELETE) ---
+// --- REJECT / DELETE A HOSPITAL (HARD DELETE) ---
+app.delete("/make-server-5e1d66c4/hospitals/:id", async (c: Context) => {
+  try {
+    const { id } = c.req.param();
+
+    const result = await db.execute({
+      sql: "DELETE FROM hospitals WHERE id = ?",
+      args: [id]
+    });
+
+    if (result.rowsAffected === 0) {
+      return c.json({ error: "Hospital not found" }, 404);
+    }
+
+    return c.json({ success: true, message: "Hospital deleted successfully" });
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : "Unknown error";
+    console.error("Delete hospital error:", errorMessage);
+    return c.json({ error: "Failed to delete hospital" }, 500);
+  }
+});
+
 // DELETE draft
 app.delete("/make-server-5e1d66c4/drafts/delete/:draftId", async (c: Context) => {
   try {
     const { draftId } = c.req.param();
-    
+
     // 🚀 THE OBLITERATOR
-    await db.execute({ 
-      sql: "DELETE FROM drafts WHERE draft_key = ? OR data LIKE ?", 
-      args: [draftId, `%"draftId":"${draftId}"%`] 
+    await db.execute({
+      sql: "DELETE FROM drafts WHERE draft_key = ? OR data LIKE ?",
+      args: [draftId, `%"draftId":"${draftId}"%`]
     });
-    
+
     return c.json({ success: true });
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : "Unknown error";
@@ -411,7 +451,7 @@ app.post("/make-server-5e1d66c4/hospital/login", async (c: Context) => {
     });
 
     if (result.rows.length === 0) {
-      return c.json({ success: false, error: "Email tidak ditemukan" }, 404);
+      return c.json({ success: false, error: "Email tidak ditemukan" }, 401);
     }
 
     const hospital = result.rows[0];
@@ -904,6 +944,7 @@ app.post("/make-server-5e1d66c4/submissions", async (c: Context) => {
     const rsbk = submission.scores?.rsbk || 0;
     const audit = submission.scores?.clinicalAudit || submission.scores?.audit || 0;
     const prm = submission.scores?.patientReport || submission.scores?.prm || 0;
+    const prmRaw = submission.scores?.patientReportRaw || submission.scores?.prmRaw || 0;
     const final = submission.scores?.final || 0;
 
     await db.execute({
@@ -915,10 +956,11 @@ app.post("/make-server-5e1d66c4/submissions", async (c: Context) => {
         rsbkScore, 
         auditScore, 
         prmScore, 
+        prm_raw_score,
         final_score, 
         created_at, 
         data
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [
         submission.id,
         submission.hospitalName,
@@ -927,6 +969,7 @@ app.post("/make-server-5e1d66c4/submissions", async (c: Context) => {
         rsbk,
         audit,
         prm,
+        prmRaw,
         final,
         submission.submittedDate || new Date().toISOString(), // maps to created_at
         JSON.stringify(submission) // Packs picName, details, and everything else safely into the 'data' column!
@@ -940,6 +983,62 @@ app.post("/make-server-5e1d66c4/submissions", async (c: Context) => {
   }
 });
 
+// --- GET submissions for the currently logged-in hospital (ALL — including soft-deleted) ---
+// Used by HospitalReviewResultPage so soft-deleted admin entries are never hidden from the hospital.
+app.get("/make-server-5e1d66c4/submissions/mine", async (c: Context) => {
+  try {
+    const { hospitalName } = c.req.query();
+    if (!hospitalName) {
+      return c.json({ error: "Missing hospitalName query parameter" }, 400);
+    }
+
+    const rs = await db.execute({
+      sql: `
+        SELECT s.*, h.city AS h_city, h.province AS h_province, h.pic_name AS h_pic_name
+        FROM submissions s
+        LEFT JOIN (
+          SELECT hospital_name, city, province, pic_name
+          FROM hospitals
+          GROUP BY hospital_name
+        ) h ON s.hospitalName = h.hospital_name
+        WHERE s.hospitalName = ?
+        ORDER BY s.created_at DESC
+      `,
+      args: [hospitalName]
+    });
+
+    const submissions = rs.rows.map((r: unknown) => {
+      const row = r as Record<string, unknown>;
+      const fullData = typeof row.data === "string" ? JSON.parse(row.data as string) : {};
+      return {
+        id: row.id,
+        hospitalName: row.hospitalName,
+        specialty: row.specialty,
+        status: row.status,
+        picName: (row.h_pic_name && row.h_pic_name !== "-") ? row.h_pic_name : (fullData.picName || "-"),
+        city: (row.h_city && row.h_city !== "-") ? row.h_city : (fullData.city || "-"),
+        province: (row.h_province && row.h_province !== "-") ? row.h_province : (fullData.province || "-"),
+        submittedDate: row.created_at,
+        scores: {
+          rsbk: row.rsbkScore,
+          audit: row.auditScore,
+          prm: row.prmScore,
+          prmRaw: row.prm_raw_score,
+          final: row.final_score
+        },
+        adminNotes: row.admin_notes,
+        details: fullData.details || {}
+      };
+    });
+
+    return c.json({ submissions });
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : "Unknown error";
+    console.error("Get my submissions error:", errorMessage);
+    return c.json({ error: "Failed to get submissions" }, 500);
+  }
+});
+
 app.get("/make-server-5e1d66c4/submissions", async (c: Context) => {
   try {
     const rs = await db.execute(`
@@ -950,6 +1049,7 @@ app.get("/make-server-5e1d66c4/submissions", async (c: Context) => {
         FROM hospitals 
         GROUP BY hospital_name
       ) h ON s.hospitalName = h.hospital_name 
+      WHERE s.deleted_at IS NULL
       ORDER BY s.created_at DESC
     `);
 
@@ -972,8 +1072,10 @@ app.get("/make-server-5e1d66c4/submissions", async (c: Context) => {
           rsbk: row.rsbkScore,
           audit: row.auditScore,
           prm: row.prmScore,
+          prmRaw: row.prm_raw_score,
           final: row.final_score
         },
+        adminNotes: row.admin_notes,
         details: fullData.details || {}
       };
     });
@@ -989,8 +1091,20 @@ app.get("/make-server-5e1d66c4/submissions", async (c: Context) => {
 app.put("/make-server-5e1d66c4/submissions/:id/status", async (c: Context) => {
   try {
     const { id } = c.req.param();
-    const { status } = await c.req.json();
-    await db.execute({ sql: "UPDATE submissions SET status = ? WHERE id = ?", args: [status, id] });
+    const { status, prmScore, prmRawScore, finalScore, adminNotes } = await c.req.json();
+
+    if (prmScore !== undefined && finalScore !== undefined) {
+      await db.execute({
+        sql: "UPDATE submissions SET status = ?, prmScore = ?, prm_raw_score = ?, final_score = ?, admin_notes = ? WHERE id = ?",
+        args: [status, prmScore, prmRawScore || 0, finalScore, adminNotes || '', id]
+      });
+    } else {
+      await db.execute({
+        sql: "UPDATE submissions SET status = ?, admin_notes = ? WHERE id = ?",
+        args: [status, adminNotes || '', id]
+      });
+    }
+
     return c.json({ success: true });
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : "Unknown error";
@@ -998,25 +1112,139 @@ app.put("/make-server-5e1d66c4/submissions/:id/status", async (c: Context) => {
     return c.json({ error: "Failed to update status" }, 500);
   }
 });
+// --- SOFT DELETE a submission (+ its ranking) ---
+app.delete("/make-server-5e1d66c4/submissions/:id", async (c: Context) => {
+  try {
+    const { id } = c.req.param();
+    const now = new Date().toISOString();
+
+    // Soft-delete the submission
+    const result = await db.execute({
+      sql: "UPDATE submissions SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL",
+      args: [now, id]
+    });
+
+    if (result.rowsAffected === 0) {
+      return c.json({ error: "Submission not found or already deleted" }, 404);
+    }
+
+    // Also soft-delete any associated ranking
+    await db.execute({
+      sql: "UPDATE rankings SET deleted_at = ? WHERE submission_id = ? AND deleted_at IS NULL",
+      args: [now, id]
+    });
+
+    return c.json({ success: true });
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : "Unknown error";
+    console.error("Soft-delete submission error:", errorMessage);
+    return c.json({ error: "Failed to delete submission" }, 500);
+  }
+});
+
+// --- RESTORE a soft-deleted submission (+ its ranking) ---
+app.post("/make-server-5e1d66c4/submissions/:id/restore", async (c: Context) => {
+  try {
+    const { id } = c.req.param();
+
+    const result = await db.execute({
+      sql: "UPDATE submissions SET deleted_at = NULL WHERE id = ? AND deleted_at IS NOT NULL",
+      args: [id]
+    });
+
+    if (result.rowsAffected === 0) {
+      return c.json({ error: "Submission not found or not deleted" }, 404);
+    }
+
+    // Also restore any associated ranking
+    await db.execute({
+      sql: "UPDATE rankings SET deleted_at = NULL WHERE submission_id = ? AND deleted_at IS NOT NULL",
+      args: [id]
+    });
+
+    return c.json({ success: true });
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : "Unknown error";
+    console.error("Restore submission error:", errorMessage);
+    return c.json({ error: "Failed to restore submission" }, 500);
+  }
+});
+
+// --- GET recently-deleted submissions (admin only) ---
+app.get("/make-server-5e1d66c4/submissions/deleted", async (c: Context) => {
+  try {
+    const rs = await db.execute(`
+      SELECT s.*, h.city AS h_city, h.province AS h_province, h.pic_name AS h_pic_name 
+      FROM submissions s 
+      LEFT JOIN (
+        SELECT hospital_name, city, province, pic_name 
+        FROM hospitals 
+        GROUP BY hospital_name
+      ) h ON s.hospitalName = h.hospital_name 
+      WHERE s.deleted_at IS NOT NULL
+      ORDER BY s.deleted_at DESC
+    `);
+
+    const submissions = rs.rows.map((r: unknown) => {
+      const row = r as Record<string, unknown>;
+      const fullData = typeof row.data === "string" ? JSON.parse(row.data as string) : {};
+      return {
+        id: row.id,
+        hospitalName: row.hospitalName,
+        specialty: row.specialty,
+        status: row.status,
+        picName: (row.h_pic_name && row.h_pic_name !== "-") ? row.h_pic_name : (fullData.picName || "-"),
+        city: (row.h_city && row.h_city !== "-") ? row.h_city : (fullData.city || "-"),
+        province: (row.h_province && row.h_province !== "-") ? row.h_province : (fullData.province || "-"),
+        submittedDate: row.created_at,
+        deletedAt: row.deleted_at,
+        scores: {
+          rsbk: row.rsbkScore,
+          audit: row.auditScore,
+          prm: row.prmScore,
+          prmRaw: row.prm_raw_score,
+          final: row.final_score
+        },
+        adminNotes: row.admin_notes,
+        details: fullData.details || {}
+      };
+    });
+
+    return c.json({ submissions });
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : "Unknown error";
+    console.error("Get deleted submissions error:", errorMessage);
+    return c.json({ error: "Failed to get deleted submissions" }, 500);
+  }
+});
+
 
 // ============ RANKINGS ============
 
 app.post("/make-server-5e1d66c4/rankings", async (c: Context) => {
   try {
     const r = await c.req.json();
-    const existing = await db.execute({ sql: "SELECT id FROM rankings WHERE submission_id = ?", args: [r.submissionId] });
+    const existing = await db.execute({ sql: "SELECT id FROM rankings WHERE submission_id = ? AND deleted_at IS NULL", args: [r.submissionId] });
 
     if (existing.rows.length > 0) {
       await db.execute({
-        sql: `UPDATE rankings SET hospital_name=?, city=?, province=?, specialty=?, final_score=?, rsbk_score=?, clinical_audit_score=?, patient_report_score=?, grade=?, approved_at=? WHERE submission_id=?`,
-        args: [r.hospitalName, r.city, r.province, r.specialty, r.finalScore, r.rsbkScore, r.clinicalAuditScore, r.patientReportScore, r.grade, r.approvedAt, r.submissionId]
+        sql: `UPDATE rankings SET hospital_name=?, city=?, province=?, specialty=?, final_score=?, rsbk_score=?, clinical_audit_score=?, patient_report_score=?, prm_raw_score=?, grade=?, approved_at=?, deleted_at=NULL WHERE submission_id=?`,
+        args: [r.hospitalName, r.city, r.province, r.specialty, r.finalScore, r.rsbkScore, r.clinicalAuditScore, r.patientReportScore, r.patientReportRawScore || 0, r.grade, r.approvedAt, r.submissionId]
       });
     } else {
       await db.execute({
-        sql: `INSERT INTO rankings (id, hospital_name, city, province, specialty, final_score, rsbk_score, clinical_audit_score, patient_report_score, grade, approved_at, submission_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        args: [r.id, r.hospitalName, r.city, r.province, r.specialty, r.finalScore, r.rsbkScore, r.clinicalAuditScore, r.patientReportScore, r.grade, r.approvedAt, r.submissionId]
+        sql: `INSERT INTO rankings (id, hospital_name, city, province, specialty, final_score, rsbk_score, clinical_audit_score, patient_report_score, prm_raw_score, grade, approved_at, submission_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        args: [r.id, r.hospitalName, r.city, r.province, r.specialty, r.finalScore, r.rsbkScore, r.clinicalAuditScore, r.patientReportScore, r.patientReportRawScore || 0, r.grade, r.approvedAt, r.submissionId]
       });
     }
+
+    // Auto-dedup: soft-delete older rankings for the same hospital+specialty
+    const now = new Date().toISOString();
+    await db.execute({
+      sql: `UPDATE rankings SET deleted_at = ? WHERE hospital_name = ? AND specialty = ? AND submission_id != ? AND deleted_at IS NULL`,
+      args: [now, r.hospitalName, r.specialty, r.submissionId]
+    });
+
     return c.json({ success: true });
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : "Unknown error";
@@ -1031,6 +1259,7 @@ app.get("/make-server-5e1d66c4/rankings", async (c: Context) => {
       SELECT r.*, h.city AS h_city, h.province AS h_province 
       FROM rankings r 
       LEFT JOIN hospitals h ON r.hospital_name = h.hospital_name 
+      WHERE r.deleted_at IS NULL
       ORDER BY r.final_score DESC
     `);
 
@@ -1049,6 +1278,7 @@ app.get("/make-server-5e1d66c4/rankings", async (c: Context) => {
         rsbkScore: row.rsbk_score,
         clinicalAuditScore: row.clinical_audit_score,
         patientReportScore: row.patient_report_score,
+        patientReportRawScore: row.prm_raw_score,
         grade: row.grade,
         approvedAt: row.approved_at,
         submissionId: row.submission_id
@@ -1082,22 +1312,22 @@ app.post("/news", async (c: Context) => {
   try {
     const newsItem = await c.req.json();
     const id = `news-${Date.now()}`;
-    
-    const finalAuthor = (newsItem.author && newsItem.author.trim() !== "") 
-      ? newsItem.author 
+
+    const finalAuthor = (newsItem.author && newsItem.author.trim() !== "")
+      ? newsItem.author
       : "Tim Redaksi PERSI";
 
     await db.execute({
       sql: `INSERT INTO news (id, title, excerpt, content, category, imageUrl, author, publishedAt, featured)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [
-        id, newsItem.title, newsItem.excerpt, newsItem.content, 
-        newsItem.category, newsItem.imageUrl || "", finalAuthor, 
+        id, newsItem.title, newsItem.excerpt, newsItem.content,
+        newsItem.category, newsItem.imageUrl || "", finalAuthor,
         newsItem.publishedAt, newsItem.featured ? 1 : 0
       ]
     });
     // Returning the newly created ID is what fixes the frontend routing bug!
-    return c.json({ success: true, id: id }); 
+    return c.json({ success: true, id: id });
   } catch (err) {
     console.error("Failed to insert news:", err);
     return c.json({ error: "Failed to add news" }, 500);
@@ -1142,13 +1372,13 @@ app.post("/events", async (c: Context) => {
   try {
     const event = await c.req.json();
     const id = `event-${Date.now()}`;
-    
+
     await db.execute({
       sql: `INSERT INTO events (id, title, description, date, endDate, location, type, imageUrl, registrationUrl, featured)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [
-        id, event.title, event.description, event.date, event.endDate || "", 
-        event.location, event.type, event.imageUrl || "", event.registrationUrl || "", 
+        id, event.title, event.description, event.date, event.endDate || "",
+        event.location, event.type, event.imageUrl || "", event.registrationUrl || "",
         event.featured ? 1 : 0
       ]
     });

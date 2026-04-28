@@ -154,7 +154,7 @@ export function SubmissionSuccessPage() {
           {/* Action Buttons */}
           <div className="flex flex-col sm:flex-row gap-4">
             <Button
-              onClick={() => navigate("/")}
+              onClick={() => navigate("/hospital-login")}
               variant="outline"
               className="flex-1 h-12 border-2 border-gray-300 font-semibold"
             >

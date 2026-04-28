@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Link, useNavigate } from "react-router";
-import { Heart, Activity, Brain, ChevronRight, CheckCircle2, Clock, Trash2, Play, Plus, Users, Layout, MapPin, ArrowRight, Building2, FileText } from "lucide-react";
+import { Heart, Activity, Brain, ChevronRight, CheckCircle2, Clock, Trash2, Play, Plus, Users, Layout, MapPin, ArrowRight, Building2, FileText, AlertCircle } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { specialtyAuditData } from "../data/specialtyAuditData";
 import { draftManager, DraftData } from "../utils/draftManager";
@@ -11,6 +11,8 @@ export function SelectSpecialtyPage() {
   const [selectedSpecialties, setSelectedSpecialties] = useState<string[]>([]);
   const [drafts, setDrafts] = useState<DraftData[]>([]);
   const [showNewAssessment, setShowNewAssessment] = useState(false);
+  const [showDeleteDraftDialog, setShowDeleteDraftDialog] = useState(false);
+  const draftToDeleteRef = useRef<string | null>(null);
 
   // Check authentication on mount
   useEffect(() => {
@@ -20,9 +22,9 @@ export function SelectSpecialtyPage() {
       navigate("/hospital-login");
       return;
     }
-    
+
     const parsedAuth = JSON.parse(auth);
-    
+
     // 2. Safely extract names handling both frontend (camelCase) and backend (snake_case) formats
     const realHospitalName = parsedAuth.hospitalName || parsedAuth.hospital_name || "Unknown Hospital";
     const realPicName = parsedAuth.picName || parsedAuth.pic_name || "Unknown PIC";
@@ -109,10 +111,18 @@ export function SelectSpecialtyPage() {
 
   const handleDeleteDraft = (draftId: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (confirm("Apakah Anda yakin ingin menghapus draft ini?")) {
+    draftToDeleteRef.current = draftId;
+    setShowDeleteDraftDialog(true);
+  };
+
+  const confirmDeleteDraft = () => {
+    const draftId = draftToDeleteRef.current;
+    if (draftId) {
       draftManager.deleteDraft(draftId);
       setDrafts(drafts.filter(d => d.draftId !== draftId));
     }
+    draftToDeleteRef.current = null;
+    setShowDeleteDraftDialog(false);
   };
 
   if (!authData) {
@@ -331,6 +341,42 @@ export function SelectSpecialtyPage() {
           </>
         )}
       </div>
+
+      {/* Delete Draft Confirmation Dialog */}
+      {showDeleteDraftDialog && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/20 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white border border-gray-100 shadow-2xl rounded-xl p-6 w-full max-w-sm transform transition-all animate-in zoom-in-95 duration-200">
+            <div className="flex gap-3 items-start">
+              <div className="p-2 bg-red-50 text-red-600 rounded-full flex-shrink-0">
+                <AlertCircle className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-gray-900">Hapus Draft?</h3>
+                <p className="text-sm text-gray-500 mt-1">
+                  Apakah Anda yakin ingin menghapus draft ini? Semua progres yang belum dikirim akan hilang permanen.
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-6">
+              <button
+                onClick={() => {
+                  draftToDeleteRef.current = null;
+                  setShowDeleteDraftDialog(false);
+                }}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors focus:outline-none"
+              >
+                Batal
+              </button>
+              <button
+                onClick={confirmDeleteDraft}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors focus:outline-none focus:ring-2 focus:ring-red-500/50"
+              >
+                Ya, Hapus
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -518,11 +564,11 @@ function DraftCard({
           </button>
         </div>
 
-        
+
 
         {/* Detail Pelayanan & Next Steps Container */}
         <div className="flex flex-col gap-8 mb-8">
-          
+
           {/* Next Steps (Moved to top of details for better visibility) */}
           {nextStage && (
             <div className="bg-[#0F4C81] rounded-2xl p-6 text-white shadow-xl shadow-blue-900/10 relative overflow-hidden">
@@ -580,52 +626,80 @@ function DraftCard({
                             <FileText className="w-4 h-4 text-blue-600" />
                             Clinical Audit
                           </span>
-                          {specDetails?.clinicalAudit?.completed ? (
-                            <span className="flex items-center gap-1 text-xs font-bold text-green-600 bg-green-100 px-2 py-0.5 rounded-full">
-                              <CheckCircle2 className="w-3.5 h-3.5" /> Lengkap (100%)
-                            </span>
-                          ) : (
-                            <span className="text-xs font-medium text-gray-400">Belum diisi</span>
-                          )}
                         </div>
-                        <div className="flex justify-between items-center text-sm mt-2 pt-2 border-t border-blue-100/50">
-                          <span className="text-gray-600">
-                            <strong className="text-gray-900">{specDetails?.clinicalAudit?.patientCount || 0}</strong> Pasien Diinput
-                          </span>
-                          <span className="font-semibold text-[#0F4C81] flex items-center gap-1">
-                            Bobot Volume: 
-                            <span className="bg-white px-2 py-0.5 rounded shadow-sm border border-blue-100">
-                              {(specDetails?.clinicalAudit?.weight || 0).toFixed(2)}x
-                            </span>
-                          </span>
+
+                        <div className="mt-2 pt-2 border-t border-blue-100/50 space-y-2">
+                          {specDetails?.clinicalAudit?.diseaseBreakdowns?.length > 0 ? (
+                            // Multi-Disease Rendering
+                            specDetails.clinicalAudit.diseaseBreakdowns.map((disease: any, idx: number) => (
+                              <div key={idx} className="flex justify-between items-center text-sm bg-white/50 p-1.5 rounded">
+                                <span className="text-gray-600">
+                                  <span className="font-semibold text-gray-800">{disease.name}</span>: <strong className="text-gray-900">{disease.patientCount}</strong> Pasien
+                                </span>
+                                <span className="font-semibold text-[#0F4C81] flex items-center gap-1">
+                                  Bobot:
+                                  <span className="bg-white px-2 py-0.5 rounded shadow-sm border border-blue-100">
+                                    {disease.weight.toFixed(2)}x
+                                  </span>
+                                </span>
+                              </div>
+                            ))
+                          ) : (
+                            // Fallback for Single-Disease or Legacy Structure
+                            <div className="flex justify-between items-center text-sm">
+                              <span className="text-gray-600">
+                                <strong className="text-gray-900">{specDetails?.clinicalAudit?.patientCount || 0}</strong> Pasien Diinput
+                              </span>
+                              <span className="font-semibold text-[#0F4C81] flex items-center gap-1">
+                                Bobot Volume:
+                                <span className="bg-white px-2 py-0.5 rounded shadow-sm border border-blue-100">
+                                  {(specDetails?.clinicalAudit?.weight || 0).toFixed(2)}x
+                                </span>
+                              </span>
+                            </div>
+                          )}
                         </div>
                       </div>
 
                       {/* 3. Patient Report (PREM/PROM) Stage */}
-                      <div className="p-3 bg-teal-50/50 rounded-lg border border-teal-100">
+                      <div className="p-3 bg-teal-50/50 rounded-lg border border-teal-100 mt-3">
                         <div className="flex items-center justify-between mb-2">
                           <span className="flex items-center gap-2 font-medium text-gray-700">
                             <Users className="w-4 h-4 text-teal-600" />
                             Patient Report (PREM/PROM)
                           </span>
-                          {specDetails?.patientReport?.completed ? (
-                            <span className="flex items-center gap-1 text-xs font-bold text-green-600 bg-green-100 px-2 py-0.5 rounded-full">
-                              <CheckCircle2 className="w-3.5 h-3.5" /> Lengkap (100%)
-                            </span>
-                          ) : (
-                            <span className="text-xs font-medium text-gray-400">Belum diisi</span>
-                          )}
                         </div>
-                        <div className="flex justify-between items-center text-sm mt-2 pt-2 border-t border-teal-100/50">
-                          <span className="text-gray-600">
-                            <strong className="text-gray-900">{specDetails?.patientReport?.patientCount || 0}</strong> Pasien Diinput
-                          </span>
-                          <span className="font-semibold text-teal-700 flex items-center gap-1">
-                            Bobot Volume: 
-                            <span className="bg-white px-2 py-0.5 rounded shadow-sm border border-teal-100">
-                              {(specDetails?.patientReport?.weight || 0).toFixed(2)}x
-                            </span>
-                          </span>
+
+                        <div className="mt-2 pt-2 border-t border-teal-100/50 space-y-2">
+                          {specDetails?.patientReport?.diseaseBreakdowns?.length > 0 ? (
+                            // Multi-Disease Rendering
+                            specDetails.patientReport.diseaseBreakdowns.map((disease: any, idx: number) => (
+                              <div key={idx} className="flex justify-between items-center text-sm bg-white/50 p-1.5 rounded">
+                                <span className="text-gray-600">
+                                  <span className="font-semibold text-gray-800">{disease.name}</span>: <strong className="text-gray-900">{disease.patientCount}</strong> Pasien
+                                </span>
+                                <span className="font-semibold text-teal-700 flex items-center gap-1">
+                                  Bobot:
+                                  <span className="bg-white px-2 py-0.5 rounded shadow-sm border border-teal-100">
+                                    {disease.weight.toFixed(2)}x
+                                  </span>
+                                </span>
+                              </div>
+                            ))
+                          ) : (
+                            // Fallback for Single-Disease or Legacy Structure
+                            <div className="flex justify-between items-center text-sm">
+                              <span className="text-gray-600">
+                                <strong className="text-gray-900">{specDetails?.patientReport?.patientCount || 0}</strong> Pasien Diinput
+                              </span>
+                              <span className="font-semibold text-teal-700 flex items-center gap-1">
+                                Bobot Volume:
+                                <span className="bg-white px-2 py-0.5 rounded shadow-sm border border-teal-100">
+                                  {(specDetails?.patientReport?.weight || 0).toFixed(2)}x
+                                </span>
+                              </span>
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>

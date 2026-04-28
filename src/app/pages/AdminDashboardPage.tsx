@@ -16,6 +16,7 @@ import {
   FileText,
   UserCheck,
   XCircle,
+  AlertCircle,
 } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -225,42 +226,51 @@ function AccountsTab({
   accounts: Array<any>;
   refreshAccounts: () => void;
 }) {
-  // 1. Swap the old local functions for our new Real Database functions
   const { approveHospital, rejectHospitalDB } = useData();
 
   const [viewPdfUrl, setViewPdfUrl] = useState<string | null>(null);
   const [viewPdfName, setViewPdfName] = useState("");
 
-  // 2. FIX: Change "pending_activation" to exactly "pending" to match the Turso Database!
+  // --- NEW REJECT DIALOG STATE ---
+  const [showRejectDialog, setShowRejectDialog] = useState(false);
+  const [hospitalToReject, setHospitalToReject] = useState<string | null>(null);
+
+  const confirmReject = async () => {
+    if (hospitalToReject) {
+      const success = await rejectHospitalDB(hospitalToReject);
+      if (success) {
+        refreshAccounts();
+      } else {
+        alert("Gagal menolak rumah sakit. Cek koneksi server.");
+      }
+    }
+    setShowRejectDialog(false);
+    setHospitalToReject(null);
+  };
+
   const pendingCount = accounts.filter(a => a.status === "pending").length;
   const activatedCount = accounts.filter(a => a.status === "activated").length;
   const rejectedCount = accounts.filter(a => a.status === "rejected").length;
 
   const statusLabel = (status: string) => {
-    // 3. FIX: Match the "pending" string here as well
     if (status === "pending") return { text: "Menunggu Aktivasi", cls: "bg-amber-100 text-amber-700", icon: <Clock className="w-3 h-3" /> };
     if (status === "activated") return { text: "Aktif", cls: "bg-green-100 text-green-700", icon: <CheckCircle2 className="w-3 h-3" /> };
     if (status === "rejected") return { text: "Ditolak", cls: "bg-red-100 text-red-700", icon: <XCircle className="w-3 h-3" /> };
     return { text: status, cls: "bg-gray-100 text-gray-700", icon: null };
   };
 
-  // --- BULLETPROOF PDF CONVERTER ---
   const createPdfBlobUrl = (base64Data: string) => {
     try {
       let base64WithoutPrefix = base64Data.includes(',')
         ? base64Data.split(',')[1]
         : base64Data;
-
-      // THE FIX: Scrub out any invisible line breaks or spaces from the database
       base64WithoutPrefix = base64WithoutPrefix.replace(/\s/g, '');
-
       const byteCharacters = atob(base64WithoutPrefix);
       const byteNumbers = new Array(byteCharacters.length);
       for (let i = 0; i < byteCharacters.length; i++) {
         byteNumbers[i] = byteCharacters.charCodeAt(i);
       }
       const byteArray = new Uint8Array(byteNumbers);
-
       const blob = new Blob([byteArray], { type: 'application/pdf' });
       return URL.createObjectURL(blob);
     } catch (error) {
@@ -290,7 +300,6 @@ function AccountsTab({
         </div>
       </div>
 
-      {/* FIXED HTML: Added the missing Table wrappers! */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full min-w-[800px]">
@@ -369,16 +378,11 @@ function AccountsTab({
                               Aktivasi
                             </button>
 
+                            {/* --- THE UPDATED REJECT BUTTON --- */}
                             <button
-                              onClick={async () => {
-                                if (window.confirm("Apakah Anda yakin ingin menolak akun ini?")) {
-                                  const success = await rejectHospitalDB(acc.id);
-                                  if (success) {
-                                    refreshAccounts();
-                                  } else {
-                                    alert("Gagal menolak rumah sakit. Cek koneksi server.");
-                                  }
-                                }
+                              onClick={() => {
+                                setHospitalToReject(acc.id);
+                                setShowRejectDialog(true);
                               }}
                               className="inline-flex items-center gap-1 px-3 py-1.5 bg-red-500 text-white text-xs font-[600] rounded-lg hover:bg-red-600 transition-colors"
                               title="Tolak Akun"
@@ -420,6 +424,42 @@ function AccountsTab({
         )}
       </div>
 
+      {/* --- THE REJECT CONFIRMATION DIALOG --- */}
+      {showRejectDialog && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/20 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white border border-gray-100 shadow-2xl rounded-xl p-6 w-full max-w-sm transform transition-all animate-in zoom-in-95 duration-200">
+            <div className="flex gap-3 items-start">
+              <div className="p-2 bg-red-50 text-red-600 rounded-full flex-shrink-0">
+                <AlertCircle className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-gray-900">Tolak Surat Tugas?</h3>
+                <p className="text-sm text-gray-500 mt-1">
+                  Apakah Anda yakin ingin menolak akun rumah sakit ini? Tindakan ini tidak dapat dibatalkan.
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-6">
+              <button
+                onClick={() => {
+                  setShowRejectDialog(false);
+                  setHospitalToReject(null);
+                }}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors focus:outline-none focus:ring-2 focus:ring-gray-200"
+              >
+                Batal
+              </button>
+              <button
+                onClick={confirmReject}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors focus:outline-none focus:ring-2 focus:ring-red-500/50"
+              >
+                Ya, Tolak
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* PDF Viewer Modal */}
       {viewPdfUrl && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-6"
@@ -438,7 +478,6 @@ function AccountsTab({
               </div>
 
               <div className="flex items-center gap-3">
-                {/* FALLBACK DOWNLOAD BUTTON */}
                 <a
                   href={viewPdfUrl || "#"}
                   download={viewPdfName || "Surat-Tugas.pdf"}
@@ -826,7 +865,7 @@ function EventsTab({
               />
             </div>
           </div>
-          
+
           <div className="space-y-1.5">
             <Label className="text-sm font-[600]">Link Registrasi (opsional)</Label>
             <Input

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link } from "react-router";
 import {
   FileText,
@@ -8,6 +8,10 @@ import {
   Clock,
   CheckCircle2,
   AlertCircle,
+  Trash2,
+  RotateCcw,
+  Archive,
+  Copy,
 } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -20,17 +24,53 @@ export function SiapAdminDashboardPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [specialtyFilter, setSpecialtyFilter] = useState("all");
-  const { submissions } = useData();
+  const [showDeletedTab, setShowDeletedTab] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [submissionToDelete, setSubmissionToDelete] = useState<string | null>(null);
+
+  const {
+    submissions,
+    deletedSubmissions,
+    softDeleteSubmission,
+    restoreSubmission,
+    fetchDeletedSubmissions,
+  } = useData();
+
+  // Load deleted submissions when the tab is opened
+  useEffect(() => {
+    if (showDeletedTab) {
+      fetchDeletedSubmissions();
+    }
+  }, [showDeletedTab, fetchDeletedSubmissions]);
+
+  // Build a set of duplicate submission IDs (older entries for same hospital+specialty)
+  const duplicateIds = new Set<string>();
+  const latestMap = new Map<string, { id: string; date: string }>();
+  submissions.forEach((s) => {
+    const key = `${s.hospitalName}|||${s.specialty}`;
+    const existing = latestMap.get(key);
+    if (!existing) {
+      latestMap.set(key, { id: s.id, date: s.submittedDate });
+    } else {
+      // Compare dates — the older one is the duplicate
+      if (new Date(s.submittedDate) > new Date(existing.date)) {
+        duplicateIds.add(existing.id);
+        latestMap.set(key, { id: s.id, date: s.submittedDate });
+      } else {
+        duplicateIds.add(s.id);
+      }
+    }
+  });
 
   const filteredSubmissions = submissions.filter((submission) => {
     const matchesSearch =
       submission.hospitalName.toLowerCase().includes(searchTerm.toLowerCase()) ||
       submission.id.toLowerCase().includes(searchTerm.toLowerCase());
-    
+
     // Improved status matching logic
     let matchesStatus = false;
     const subStatus = submission.status?.toLowerCase() || "";
-    
+
     if (statusFilter === "all") {
       matchesStatus = true;
     } else if (statusFilter === "pending") {
@@ -44,17 +84,17 @@ export function SiapAdminDashboardPage() {
     // Specialty matching logic (BULLETPROOF)
     let matchesSpecialty = false;
     const subSpecialty = submission.specialty?.toLowerCase() || ""; // Safely fallback if undefined
-    
+
     if (specialtyFilter === "all") {
       matchesSpecialty = true;
     } else {
       // Use .includes() to catch variations like "cardiology " or " Cardiology"
       matchesSpecialty = subSpecialty.includes(specialtyFilter.toLowerCase());
     }
-      
+
     return matchesSearch && matchesStatus && matchesSpecialty;
   });
-  
+
   const stats = {
     total: submissions.length,
     pending: submissions.filter(s => s.status?.toLowerCase() === "pending").length,
@@ -65,12 +105,16 @@ export function SiapAdminDashboardPage() {
       : 0,
   };
 
+  // 1. Create a helper array containing ONLY approved submissions
+  const approvedSubmissions = submissions.filter(s => s.status?.toLowerCase().includes("approved"));
+
+  // 2. Use approvedSubmissions to count the tiers
   const dynamicScoreDistribution = [
-    { range: "90-100 — Tier 1: Platinum", count: submissions.filter(s => ((s.scores?.final as number) || 0) >= 90).length, color: "bg-purple-500" },
-    { range: "80-89 — Tier 2: Outstanding", count: submissions.filter(s => ((s.scores?.final as number) || 0) >= 80 && ((s.scores?.final as number) || 0) < 90).length, color: "bg-blue-500" },
-    { range: "70-79 — Tier 3: Excellent", count: submissions.filter(s => ((s.scores?.final as number) || 0) >= 70 && ((s.scores?.final as number) || 0) < 80).length, color: "bg-emerald-500" },
-    { range: "60-69 — Tier 4: Commendable", count: submissions.filter(s => ((s.scores?.final as number) || 0) >= 60 && ((s.scores?.final as number) || 0) < 70).length, color: "bg-amber-500" },
-    { range: "0-59 — Tier 5: Developing", count: submissions.filter(s => ((s.scores?.final as number) || 0) < 60).length, color: "bg-slate-500" },
+    { range: "90-100 — Tier 1: Platinum", count: approvedSubmissions.filter(s => ((s.scores?.final as number) || 0) >= 90).length, color: "bg-purple-500" },
+    { range: "80-89 — Tier 2: Outstanding", count: approvedSubmissions.filter(s => ((s.scores?.final as number) || 0) >= 80 && ((s.scores?.final as number) || 0) < 90).length, color: "bg-blue-500" },
+    { range: "70-79 — Tier 3: Excellent", count: approvedSubmissions.filter(s => ((s.scores?.final as number) || 0) >= 70 && ((s.scores?.final as number) || 0) < 80).length, color: "bg-emerald-500" },
+    { range: "60-69 — Tier 4: Commendable", count: approvedSubmissions.filter(s => ((s.scores?.final as number) || 0) >= 60 && ((s.scores?.final as number) || 0) < 70).length, color: "bg-amber-500" },
+    { range: "0-59 — Tier 5: Developing", count: approvedSubmissions.filter(s => ((s.scores?.final as number) || 0) < 60).length, color: "bg-slate-500" },
   ];
 
   const dynamicStatusDistribution = [
@@ -78,6 +122,19 @@ export function SiapAdminDashboardPage() {
     { name: "Approved", value: stats.approved, color: "#10B981" },
     { name: "Revision Required", value: stats.revision, color: "#EF4444" },
   ];
+
+  const handleDeleteClick = (id: string) => {
+    setSubmissionToDelete(id);
+    setShowDeleteDialog(true);
+  };
+
+  const confirmDelete = async () => {
+    if (submissionToDelete) {
+      await softDeleteSubmission(submissionToDelete);
+    }
+    setSubmissionToDelete(null);
+    setShowDeleteDialog(false);
+  };
 
   return (
     <div className="min-h-screen bg-gray-50 p-6">
@@ -151,7 +208,7 @@ export function SiapAdminDashboardPage() {
                   <div className="w-full bg-gray-200 rounded-full h-3">
                     <div
                       className={`${item.color} h-3 rounded-full transition-all duration-500`}
-                      style={{ width: stats.total > 0 && item.count > 0 ? `${(item.count / stats.total) * 100}%` : "0%" }}
+                      style={{ width: stats.approved > 0 && item.count > 0 ? `${(item.count / stats.total) * 100}%` : "0%" }}
                     />
                   </div>
                 </div>
@@ -193,133 +250,270 @@ export function SiapAdminDashboardPage() {
           </div>
         </div>
 
-        {/* Filters */}
-        <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
-          <div className="flex items-center gap-4">
-            <div className="flex-1 relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-              <Input
-                type="text"
-                placeholder="Cari berdasarkan nama RS..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="pl-11 h-11"
-              />
-            </div>
-            <SimpleSelect
-              value={statusFilter}
-              onChange={setStatusFilter}
-              placeholder="Filter Status"
-              options={[
-                { value: "all", label: "Semua Status" },
-                { value: "pending", label: "Pending Review" },
-                { value: "approved", label: "Approved" },
-                { value: "rejected", label: "Revision Required/Rejected" },
-              ]}
-            />
-            <SimpleSelect
-              value={specialtyFilter}
-              onChange={setSpecialtyFilter}
-              placeholder="Filter Specialty"
-              options={[
-                { value: "all", label: "Semua Specialty" },
-                { value: "kardiologi", label: "Kardiologi" },
-                { value: "onkologi", label: "Onkologi" },
-                { value: "neurologi", label: "Neurologi" },
-              ]}
-            />
-          </div>
+        {/* Tab Toggle: Active / Recently Deleted */}
+        <div className="flex items-center gap-3 mb-6">
+          <button
+            onClick={() => setShowDeletedTab(false)}
+            className={`px-5 py-2.5 rounded-lg text-sm font-bold transition-colors ${!showDeletedTab
+              ? "bg-[#0F4C81] text-white shadow-md"
+              : "bg-white text-gray-600 border border-gray-200 hover:bg-gray-50"
+              }`}
+          >
+            <FileText className="w-4 h-4 inline mr-2 -mt-0.5" />
+            Aktif ({submissions.length})
+          </button>
+          <button
+            onClick={() => setShowDeletedTab(true)}
+            className={`px-5 py-2.5 rounded-lg text-sm font-bold transition-colors ${showDeletedTab
+              ? "bg-red-600 text-white shadow-md"
+              : "bg-white text-gray-600 border border-gray-200 hover:bg-gray-50"
+              }`}
+          >
+            <Archive className="w-4 h-4 inline mr-2 -mt-0.5" />
+            Recently Deleted ({deletedSubmissions.length})
+          </button>
         </div>
 
-        {/* Submissions Table */}
-        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-gray-50 border-b border-gray-200">
-                <tr>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                    Submission ID
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                    Nama Rumah Sakit
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                    Specialty
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                    Tanggal Submit
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                    Final Score
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                    Status
-                  </th>
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
-                    Action
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200">
-                {filteredSubmissions.length === 0 ? (
+        {/* Filters (only for active tab) */}
+        {!showDeletedTab && (
+          <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
+            <div className="flex items-center gap-4">
+              <div className="flex-1 relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                <Input
+                  type="text"
+                  placeholder="Cari berdasarkan nama RS..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="pl-11 h-11"
+                />
+              </div>
+              <SimpleSelect
+                value={statusFilter}
+                onChange={setStatusFilter}
+                placeholder="Filter Status"
+                options={[
+                  { value: "all", label: "Semua Status" },
+                  { value: "pending", label: "Pending Review" },
+                  { value: "approved", label: "Approved" },
+                  { value: "rejected", label: "Revision Required/Rejected" },
+                ]}
+              />
+              <SimpleSelect
+                value={specialtyFilter}
+                onChange={setSpecialtyFilter}
+                placeholder="Filter Specialty"
+                options={[
+                  { value: "all", label: "Semua Specialty" },
+                  { value: "kardiologi", label: "Kardiologi" },
+                  { value: "onkologi", label: "Onkologi" },
+                  { value: "neurologi", label: "Neurologi" },
+                ]}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* ========== ACTIVE SUBMISSIONS TABLE ========== */}
+        {!showDeletedTab ? (
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
-                    <td colSpan={7} className="px-6 py-20 text-center">
-                      <div className="flex flex-col items-center gap-4">
-                        <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center">
-                          <FileText className="w-10 h-10 text-gray-300" />
-                        </div>
-                        <div>
-                          <p className="font-bold text-gray-500 text-lg mb-1">Belum ada submission</p>
-                          <p className="text-sm text-gray-400 max-w-md">
-                            Submission dari rumah sakit akan muncul di sini setelah mereka menyelesaikan dan mengirimkan NHR PERSI Assessment.
-                          </p>
-                        </div>
-                        <div className="flex items-center gap-2 mt-2 px-4 py-2 bg-blue-50 border border-blue-200 rounded-lg">
-                          <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
-                          <span className="text-sm text-blue-700 font-medium">Platform siap menerima submission</span>
-                        </div>
-                      </div>
-                    </td>
+                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                      Submission ID
+                    </th>
+                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                      Nama Rumah Sakit
+                    </th>
+                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                      Specialty
+                    </th>
+                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                      Tanggal Submit
+                    </th>
+                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                      Final Score
+                    </th>
+                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                      Status
+                    </th>
+                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                      Action
+                    </th>
                   </tr>
-                ) : (
-                  filteredSubmissions.map((submission) => (
-                    <tr key={submission.id} className="hover:bg-gray-50 transition-colors">
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className="font-mono text-sm text-gray-900">{submission.id}</span>
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className="font-medium text-gray-900">{submission.hospitalName}</span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className="text-sm text-gray-600">{submission.specialty}</span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className="text-sm text-gray-600">
-                          {new Date(submission.submittedDate).toLocaleDateString("id-ID")}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className="text-lg font-bold text-[#0F4C81]">{((submission.scores?.final as number) || 0).toFixed(1)}</span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <StatusBadge status={submission.status} />
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <Link to={`/siap-persi/admin/review/${submission.id}`}>
-                          <Button size="sm" className="bg-[#0F4C81] hover:bg-[#0d3d66]">
-                            <Eye className="w-4 h-4 mr-2" />
-                            Review
-                          </Button>
-                        </Link>
+                </thead>
+                <tbody className="divide-y divide-gray-200">
+                  {filteredSubmissions.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="px-6 py-20 text-center">
+                        <div className="flex flex-col items-center gap-4">
+                          <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center">
+                            <FileText className="w-10 h-10 text-gray-300" />
+                          </div>
+                          <div>
+                            <p className="font-bold text-gray-500 text-lg mb-1">Belum ada submission</p>
+                            <p className="text-sm text-gray-400 max-w-md">
+                              Submission dari rumah sakit akan muncul di sini setelah mereka menyelesaikan dan mengirimkan NHR PERSI Assessment.
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2 mt-2 px-4 py-2 bg-blue-50 border border-blue-200 rounded-lg">
+                            <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
+                            <span className="text-sm text-blue-700 font-medium">Platform siap menerima submission</span>
+                          </div>
+                        </div>
                       </td>
                     </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+                  ) : (
+                    filteredSubmissions.map((submission) => (
+                      <tr key={submission.id} className="hover:bg-gray-50 transition-colors">
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-sm text-gray-900">{submission.id.slice(0, 8)}...</span>
+                            {duplicateIds.has(submission.id) && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-orange-50 text-orange-600 border border-orange-200 rounded-full text-[10px] font-bold uppercase tracking-wide">
+                                <Copy className="w-3 h-3" />
+                                Duplikat
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className="font-medium text-gray-900">{submission.hospitalName}</span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className="text-sm text-gray-600">{submission.specialty}</span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className="text-sm text-gray-600">
+                            {new Date(submission.submittedDate).toLocaleDateString("id-ID")}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className="text-lg font-bold text-[#0F4C81]">{((submission.scores?.final as number) || 0).toFixed(1)}</span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <StatusBadge status={submission.status} />
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="flex items-center gap-2">
+                            <Link to={`/siap-persi/admin/review/${submission.id}`}>
+                              <Button size="sm" className="bg-[#0F4C81] hover:bg-[#0d3d66]">
+                                <Eye className="w-4 h-4 mr-2" />
+                                Review
+                              </Button>
+                            </Link>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="border-red-200 text-red-600 hover:bg-red-50 hover:border-red-300"
+                              onClick={() => handleDeleteClick(submission.id)}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : (
+          /* ========== RECENTLY DELETED TABLE ========== */
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-100 bg-red-50/50">
+              <p className="text-sm text-red-600 font-medium flex items-center gap-2">
+                <AlertCircle className="w-4 h-4" />
+                Data dihapus otomatis secara permanen setelah 30 hari.
+              </p>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-gray-50 border-b border-gray-200">
+                  <tr>
+                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Hospital</th>
+                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Specialty</th>
+                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Deleted At</th>
+                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Status</th>
+                    <th className="px-6 py-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-200">
+                  {deletedSubmissions.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="px-6 py-16 text-center">
+                        <Archive className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+                        <p className="font-bold text-gray-400">Tidak ada data yang dihapus</p>
+                      </td>
+                    </tr>
+                  ) : (
+                    deletedSubmissions.map((s: any) => (
+                      <tr key={s.id} className="hover:bg-gray-50 transition-colors">
+                        <td className="px-6 py-4 font-medium text-gray-900">{s.hospitalName}</td>
+                        <td className="px-6 py-4 text-sm text-gray-600">{s.specialty}</td>
+                        <td className="px-6 py-4 text-sm text-gray-500">
+                          {s.deletedAt ? new Date(s.deletedAt).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" }) : "-"}
+                        </td>
+                        <td className="px-6 py-4"><StatusBadge status={s.status} /></td>
+                        <td className="px-6 py-4">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="border-emerald-200 text-emerald-600 hover:bg-emerald-50 hover:border-emerald-300"
+                            onClick={() => restoreSubmission(s.id)}
+                          >
+                            <RotateCcw className="w-4 h-4 mr-1.5" />
+                            Pulihkan
+                          </Button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Delete Confirmation Dialog */}
+      {showDeleteDialog && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/20 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white border border-gray-100 shadow-2xl rounded-xl p-6 w-full max-w-sm transform transition-all animate-in zoom-in-95 duration-200">
+            <div className="flex gap-3 items-start">
+              <div className="p-2 bg-red-50 text-red-600 rounded-full flex-shrink-0">
+                <AlertCircle className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-gray-900">Hapus Submission?</h3>
+                <p className="text-sm text-gray-500 mt-1">
+                  Submission akan dipindahkan ke &quot;Recently Deleted&quot; dan dapat dipulihkan dalam 30 hari. Setelah itu data dihapus permanen.
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-6">
+              <button
+                onClick={() => {
+                  setSubmissionToDelete(null);
+                  setShowDeleteDialog(false);
+                }}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors focus:outline-none"
+              >
+                Batal
+              </button>
+              <button
+                onClick={confirmDelete}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors focus:outline-none focus:ring-2 focus:ring-red-500/50"
+              >
+                Ya, Hapus
+              </button>
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

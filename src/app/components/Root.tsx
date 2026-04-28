@@ -76,9 +76,8 @@ export function Root() {
                   <Link
                     key={link.to}
                     to={link.to}
-                    className={`relative px-4 py-2 rounded-lg text-sm font-[500] transition-colors z-10 ${
-                      active ? "text-[#1E3A8A]" : "text-gray-600 hover:text-[#1E3A8A]"
-                    }`}
+                    className={`relative px-4 py-2 rounded-lg text-sm font-[500] transition-colors z-10 ${active ? "text-[#1E3A8A]" : "text-gray-600 hover:text-[#1E3A8A]"
+                      }`}
                   >
                     {active && (
                       <motion.div
@@ -97,13 +96,13 @@ export function Root() {
             <div className="flex items-center gap-3">
               <Link
                 to="/hospital-login"
-                className="hidden lg:inline-flex text-sm font-[600] px-5 py-2.5 bg-[#0D9488] text-white rounded-lg hover:bg-[#0b7f75] transition-colors"
+                className="inline-flex text-sm font-[600] px-3 py-2 lg:px-5 lg:py-2.5 bg-[#0D9488] text-white rounded-lg hover:bg-[#0b7f75] transition-colors"
               >
                 Portal Rumah Sakit
               </Link>
 
               {/* User Menu */}
-              {isLoggedIn ? (
+              {isLoggedIn && (
                 <div className="relative">
                   <button
                     onClick={() => setUserMenuOpen(!userMenuOpen)}
@@ -163,13 +162,6 @@ export function Root() {
                     </>
                   )}
                 </div>
-              ) : (
-                <Link
-                  to="/admin/login"
-                  className="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition-colors"
-                >
-                  <User className="w-4 h-4 text-gray-500" />
-                </Link>
               )}
 
               {/* Mobile Menu Toggle */}
@@ -203,11 +195,10 @@ export function Root() {
                         key={link.to}
                         to={link.to}
                         onClick={() => setMobileMenuOpen(false)}
-                        className={`block px-4 py-2.5 rounded-lg text-sm font-[500] ${
-                          isActive(link.to)
-                            ? "text-[#1E3A8A] bg-blue-50"
-                            : "text-gray-600 hover:bg-gray-50 bg-transparent transition-colors"
-                        }`}
+                        className={`block px-4 py-2.5 rounded-lg text-sm font-[500] ${isActive(link.to)
+                          ? "text-[#1E3A8A] bg-blue-50"
+                          : "text-gray-600 hover:bg-gray-50 bg-transparent transition-colors"
+                          }`}
                       >
                         {link.label}
                       </Link>
@@ -314,10 +305,10 @@ export function Root() {
                 </li>
                 <li>
                   <Link
-                    to="/siap-persi/overview"
+                    to="/admin/login"
                     className="hover:text-white transition-colors"
                   >
-                    NHR PERSI Overview
+                    Admin Login
                   </Link>
                 </li>
               </ul>
@@ -357,4 +348,3 @@ export function Root() {
     </div>
   );
 }
- 
